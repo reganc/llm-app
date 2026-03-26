@@ -1,0 +1,188 @@
+# ============================================================
+#  Custom LLM Stack — RTX 3060 (12GB VRAM) — Ubuntu/Debian
+#  Model: Mistral 7B Q4_K_M  (~6.5 GB VRAM, ~35-50 tok/s)
+#  Services: Ollama · ChromaDB · SearXNG · Open WebUI · FastAPI
+# ============================================================
+
+services:
+
+  # ── 1. Ollama ───────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_HOST=http://0.0.0.0:11434
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_NEW_ENGINE=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+
+  # ── 2. Model Bootstrapper ───────────────────────────────────
+  ollama-bootstrap:
+    image: ollama/ollama:latest
+    container_name: ollama-bootstrap
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_models:/root/.ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo '>>> Pulling mistral:7b-instruct-q4_K_M...'
+        ollama pull mistral:7b-instruct-q4_K_M
+        echo '>>> Pulling nomic-embed-text...'
+        ollama pull nomic-embed-text
+        echo '>>> All models ready!'
+    restart: "no"
+
+  # ── 3. ChromaDB — persistent vector store ──────────────────
+  chromadb:
+    image: chromadb/chroma:0.5.23
+    container_name: chromadb
+    restart: unless-stopped
+    ports:
+      - "8020:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v2/heartbeat || curl -sf http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── 4. SearXNG — private self-hosted search engine ─────────
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    ports:
+      - "8025:8080"
+    volumes:
+      - searxng_data:/etc/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8025
+      - SEARXNG_SECRET_KEY=change-this-secret-key-please
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || wget -qO- http://localhost:8080/ || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ── 5. Open WebUI ───────────────────────────────────────────
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - webui_data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=false
+      - DEFAULT_MODELS=mistral:7b-instruct-q4_K_M
+      - WEBUI_NAME=My Local AI
+      - ENABLE_RAG_WEB_SEARCH=true
+      - RAG_WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://searxng:8080/search?q=<query>&format=json
+      - ENABLE_IMAGE_GENERATION=false
+      # Route chat through the FastAPI so search/Firecrawl/memory are active
+      - OPENAI_API_BASE_URL=http://llm-api:8030/v1
+      - OPENAI_API_KEY=change-me-in-production
+    depends_on:
+      ollama:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  # ── 6. Custom FastAPI — RAG + search + memory ───────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: llm-api
+    restart: unless-stopped
+    ports:
+      - "8030:8030"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - DEFAULT_MODEL=mistral:7b-instruct-q4_K_M
+      - API_KEY=change-me-in-production
+      - MAX_TOKENS=4096
+      - CORS_ORIGINS=*
+      - DEFAULT_SYSTEM_PROMPT=default
+      - FINETUNE_DIR=/app/finetune
+      - MEMORY_ENABLED=true
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - EMBED_MODEL=nomic-embed-text
+      - CHUNK_SIZE=800
+      - CHUNK_OVERLAP=150
+      - MEMORY_TOP_K=5
+      - SEARCH_ENABLED=true
+      - SEARXNG_URL=http://searxng:8080
+      - AUTO_SEARCH_THRESHOLD=0.35
+      - SEARCH_RESULTS=5
+      - FIRECRAWL_URL=http://host.docker.internal:3002
+      - FIRECRAWL_API_KEY=fc-local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - finetune_data:/app/finetune
+    depends_on:
+      ollama:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+
+volumes:
+  ollama_models:
+    driver: local
+  webui_data:
+    driver: local
+  finetune_data:
+    driver: local
+  chroma_data:
+    driver: local
+  searxng_data:
+    driver: local
+
+networks:
+  default:
+    name: llm-network
+    driver: bridge

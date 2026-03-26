@@ -1,0 +1,41 @@
+# SearXNG settings — local private instance for llm-app
+use_default_settings: true
+
+server:
+  secret_key: "change-this-secret-key-please"
+  limiter: false          # disable rate limiting
+  image_proxy: false
+  method: "GET"           # allow GET requests for API calls
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+# Disable bot detection — this is a local private instance
+botdetection:
+  ip_limit:
+    enabled: false
+  ip_lists:
+    enabled: false
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: d
+    disabled: false
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: w
+    disabled: false
