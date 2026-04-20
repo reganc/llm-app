@@ -244,3 +244,4 @@ nvidia-smi
 # Reduce parallel requests
 # OLLAMA_NUM_PARALLEL=1
 ```
+# llm-app
