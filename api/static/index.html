@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Local AI</title>
+  <link rel="icon" href="/static/favicon.svg" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <!-- App shell -->
+  <div id="app">
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-head">
+        <button id="newChatBtn" class="primary-btn" title="New chat (⌘N)">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span>New chat</span>
+        </button>
+        <button id="commandBtn" class="ghost-btn" title="Command palette (⌘K)">⌘K</button>
+      </div>
+
+      <div class="sidebar-section">
+        <input id="convFilter" type="text" placeholder="Filter conversations…" class="filter-input" />
+      </div>
+
+      <nav id="convList" class="conv-list" aria-label="Conversations"></nav>
+
+      <div class="sidebar-foot">
+        <button id="libraryBtn" class="ghost-btn full" title="Library — search, read, manage saved sources">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 2.5h3.5a1.5 1.5 0 011.5 1.5v9a1.5 1.5 0 00-1.5-1.5H3v-9zM13 2.5H9.5A1.5 1.5 0 008 4v9a1.5 1.5 0 011.5-1.5H13v-9z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+          <span>Library</span>
+          <span id="memoryCount" class="count">0</span>
+        </button>
+        <button id="settingsBtn" class="ghost-btn full" title="Settings">
+          <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="2.4" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M8 1v2.2M8 12.8V15M3.05 3.05l1.55 1.55M11.4 11.4l1.55 1.55M1 8h2.2M12.8 8H15M3.05 12.95l1.55-1.55M11.4 4.6l1.55-1.55" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <span>Settings</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main column -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="toggleSidebar" class="icon-btn" title="Toggle sidebar">
+            <svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <h1 id="convTitle" class="conv-title">Quick chat</h1>
+        </div>
+        <div class="topbar-right">
+          <button id="modelPicker" class="pill" title="Switch model">
+            <span class="led"></span>
+            <span id="modelLabel">…</span>
+            <svg viewBox="0 0 16 16" width="10" height="10"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </button>
+          <button id="searchToggle" class="pill" data-on="true" title="Web search on every message">
+            <svg viewBox="0 0 16 16" width="13" height="13"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M14 14l-3.3-3.3" stroke="currentColor" stroke-width="1.5"/></svg>
+            <span>Search</span>
+          </button>
+          <button id="sourcesBtn" class="pill" title="Sources panel">
+            <svg viewBox="0 0 16 16" width="13" height="13"><path d="M3 3h10v3H3zM3 8h10v2H3zM3 11h7v2H3z" fill="currentColor" opacity="0.85"/></svg>
+            <span>Sources</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Chat thread -->
+      <section id="thread" class="thread"></section>
+
+      <!-- Empty state (initial) -->
+      <section id="empty" class="empty">
+        <div class="empty-card">
+          <div class="empty-mark">◉</div>
+          <h2>Local AI</h2>
+          <p>Private, GPU-accelerated. Chat, read webpages, ingest documents, and search the live web — all without leaving your machine.</p>
+          <div class="quick-actions">
+            <button type="button" class="quick-action" data-action="attach">
+              <svg viewBox="0 0 16 16" width="14" height="14"><path d="M9.6 4.4l-5.2 5.2a2.4 2.4 0 003.4 3.4l5.6-5.6a4 4 0 00-5.7-5.7L2 7.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+              <div>
+                <strong>Upload a document</strong>
+                <span>PDF, DOCX, TXT, MD, CSV, RTF — saved to memory</span>
+              </div>
+            </button>
+            <button type="button" class="quick-action" data-action="add-url">
+              <svg viewBox="0 0 16 16" width="14" height="14"><path d="M6.5 8.5l3-3M5.5 10.5L4 12a2.5 2.5 0 11-3.5-3.5L2 7M10.5 5.5L12 4a2.5 2.5 0 113.5 3.5L14 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+              <div>
+                <strong>Read a webpage</strong>
+                <span>Fetches the article, saves to memory, opens chat</span>
+              </div>
+            </button>
+          </div>
+          <div class="suggest">
+            <button class="suggest-btn" data-q="What's new in Mistral 7B's instruction following?">What's new in Mistral 7B's instruction following?</button>
+            <button class="suggest-btn" data-q="/search latest GPU prices RTX 3060 Ti">/search latest GPU prices RTX 3060 Ti</button>
+            <button class="suggest-btn" data-q="/x current sentiment about AI regulation">/x current sentiment about AI regulation</button>
+            <button class="suggest-btn" data-q="What's in my memory? List the most recent sources.">What's in my memory? List the most recent sources.</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Composer -->
+      <footer class="composer">
+        <form id="composer" class="composer-inner">
+          <textarea id="composerInput" rows="1" placeholder="Message Local AI — paste a URL, drop a file, or type / for commands"></textarea>
+          <button type="submit" id="sendBtn" class="send-btn" disabled title="Send (⌘↩)">
+            <svg viewBox="0 0 16 16" width="16" height="16"><path d="M2 8L14 2L9 14L8 9L2 8Z" fill="currentColor"/></svg>
+          </button>
+        </form>
+        <input type="file" id="fileInput" hidden accept=".txt,.md,.csv,.pdf,.docx,.rtf,.json,.html,.xml,.log" />
+        <div class="composer-actions">
+          <button type="button" id="attachBtn" class="action-chip" title="Upload a file (PDF, DOCX, TXT, MD, CSV, RTF) — saved to memory">
+            <svg viewBox="0 0 16 16" width="13" height="13"><path d="M9.6 4.4l-5.2 5.2a2.4 2.4 0 003.4 3.4l5.6-5.6a4 4 0 00-5.7-5.7L2 7.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            <span>Attach file</span>
+          </button>
+          <button type="button" id="addUrlBtn" class="action-chip" title="Read a webpage and save it to memory">
+            <svg viewBox="0 0 16 16" width="13" height="13"><path d="M6.5 8.5l3-3M5.5 10.5L4 12a2.5 2.5 0 11-3.5-3.5L2 7M10.5 5.5L12 4a2.5 2.5 0 113.5 3.5L14 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+            <span>Add URL</span>
+          </button>
+          <span class="composer-hint-inline">Drop a file anywhere to ingest</span>
+        </div>
+        <div class="composer-hint">
+          <span><kbd>/</kbd> commands · <kbd>⌘K</kbd> palette · <kbd>⌘↩</kbd> send</span>
+          <span id="streamStatus" class="stream-status"></span>
+        </div>
+      </footer>
+    </main>
+
+    <!-- Right rail: Sources -->
+    <aside id="sources" class="sources" hidden>
+      <div class="sources-head">
+        <h3>Sources</h3>
+        <button class="icon-btn" id="closeSources" title="Close">×</button>
+      </div>
+      <div class="sources-body">
+
+        <!-- Always-fetched URLs -->
+        <section class="rail-section">
+          <header class="rail-section-head">
+            <h4>Always fetch</h4>
+            <span class="muted-small">Pulled on every web search</span>
+          </header>
+          <form id="auxRailForm" class="aux-add">
+            <input type="url" id="auxRailUrl" placeholder="https://example.com" required />
+            <button type="submit" class="primary-btn" title="Add">+</button>
+          </form>
+          <div id="auxRailList" class="aux-list"></div>
+        </section>
+
+        <!-- Live sources from the most recent answer -->
+        <section class="rail-section">
+          <header class="rail-section-head">
+            <h4>Last search</h4>
+            <span id="lastSearchMeta" class="muted-small">no search yet</span>
+          </header>
+          <div id="lastSearchList" class="aux-list">
+            <p class="muted">Live search and RAG sources will appear here when the assistant uses them.</p>
+          </div>
+        </section>
+
+      </div>
+    </aside>
+  </div>
+
+  <!-- Drag overlay -->
+  <div id="dropOverlay" class="drop-overlay" hidden>
+    <div>Drop a file to ingest into a new conversation</div>
+  </div>
+
+  <!-- Modal: API key -->
+  <dialog id="apiKeyModal" class="modal">
+    <form method="dialog" id="apiKeyForm">
+      <h3>API key</h3>
+      <p>Enter the bearer token configured in <code>docker-compose.yml</code> (env <code>API_KEY</code>).</p>
+      <input type="password" id="apiKeyInput" placeholder="change-me-in-production" autocomplete="off" required />
+      <div class="modal-actions">
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Modal: Settings -->
+  <dialog id="settingsModal" class="modal wide">
+    <form method="dialog">
+      <header class="modal-head"><h3>Settings</h3><button class="icon-btn" formnovalidate>×</button></header>
+      <div class="modal-body">
+        <div class="field">
+          <label>Default model</label>
+          <select id="settingModel"></select>
+        </div>
+        <div class="field">
+          <label>System prompt</label>
+          <select id="settingPrompt"></select>
+          <small id="settingPromptDesc" class="muted"></small>
+        </div>
+        <div class="field row">
+          <label>Always search the web</label>
+          <input type="checkbox" id="settingSearchAlways" />
+        </div>
+        <div class="field">
+          <label>API key</label>
+          <input type="password" id="settingApiKey" />
+          <small class="muted">Stored in this browser's localStorage only.</small>
+        </div>
+        <div class="field">
+          <label>X / Twitter</label>
+          <div id="xStatus" class="muted">…</div>
+        </div>
+        <small class="muted">Manage always-fetch URLs from the <strong>Sources</strong> rail (top-right).</small>
+      </div>
+      <footer class="modal-foot">
+        <button type="submit" class="primary-btn">Done</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: Command palette -->
+  <dialog id="paletteModal" class="modal palette">
+    <form method="dialog">
+      <input type="text" id="paletteInput" placeholder="Type a command or query…" autocomplete="off" />
+      <ul id="paletteList" class="palette-list"></ul>
+    </form>
+  </dialog>
+
+  <!-- Modal: Library -->
+  <dialog id="libraryModal" class="modal library">
+    <header class="library-head">
+      <div class="library-head-left">
+        <h3>Library</h3>
+        <span id="libraryStats" class="muted-small">…</span>
+      </div>
+      <div class="library-head-right">
+        <button type="button" id="libraryAddUrlBtn" class="ghost-btn" title="Read a webpage and save to memory">
+          <svg viewBox="0 0 16 16" width="13" height="13"><path d="M6.5 8.5l3-3M5.5 10.5L4 12a2.5 2.5 0 11-3.5-3.5L2 7M10.5 5.5L12 4a2.5 2.5 0 113.5 3.5L14 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+          <span>Add URL</span>
+        </button>
+        <button type="button" id="libraryAddFileBtn" class="ghost-btn" title="Upload a document into memory">
+          <svg viewBox="0 0 16 16" width="13" height="13"><path d="M9.6 4.4l-5.2 5.2a2.4 2.4 0 003.4 3.4l5.6-5.6a4 4 0 00-5.7-5.7L2 7.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+          <span>Upload</span>
+        </button>
+        <input type="file" id="libraryAddFileInput" hidden accept=".txt,.md,.csv,.pdf,.docx,.rtf,.json,.html,.xml,.log" />
+        <button type="button" id="libraryRefreshBtn" class="icon-btn" title="Refresh">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M3 8a5 5 0 018.5-3.5L13 3v4H9l1.5-1.5A3.5 3.5 0 004.5 8 3.5 3.5 0 008 11.5c1.4 0 2.6-.8 3.2-2H13A5 5 0 013 8z" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="icon-btn" data-close="libraryModal" title="Close">×</button>
+      </div>
+    </header>
+
+    <div class="library-body">
+      <!-- Left pane: search + filter + list -->
+      <aside class="library-list-pane">
+        <div class="library-search">
+          <input type="search" id="librarySearch" placeholder="Search title or URL…" autocomplete="off" />
+        </div>
+        <div id="libraryTypes" class="library-types"></div>
+        <div id="libraryList" class="library-list"></div>
+      </aside>
+
+      <!-- Right pane: source detail -->
+      <section id="libraryDetail" class="library-detail">
+        <div class="library-empty">
+          <div class="library-empty-mark">📚</div>
+          <p>Select a source to read its full content.</p>
+        </div>
+      </section>
+    </div>
+  </dialog>
+
+  <!-- Modal: Add URL -->
+  <dialog id="urlIngestModal" class="modal">
+    <form id="urlIngestForm">
+      <header class="modal-head">
+        <h3>Read a webpage</h3>
+        <button type="button" class="icon-btn" data-close="urlIngestModal" formnovalidate>×</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted">Fetches the page, extracts the main content, saves it to memory, and opens a new conversation so you can ask follow-up questions.</p>
+        <div class="field">
+          <label>URL</label>
+          <input type="url" id="urlIngestInput" placeholder="https://example.com/article" required autocomplete="off" />
+        </div>
+        <div class="field">
+          <label>Conversation name <span class="muted-small">(optional)</span></label>
+          <input type="text" id="urlIngestName" placeholder="Auto-generated from page title" autocomplete="off" />
+        </div>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="ghost-btn" data-close="urlIngestModal">Cancel</button>
+        <button type="submit" class="primary-btn">Read &amp; save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Toast container -->
+  <div id="toastHost" class="toast-host" aria-live="polite"></div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -1,18 +1,39 @@
-FROM python:3.11-slim
+# ── Stage 1: build x-cli (X/Twitter search binary) ───────────────────────────
+FROM golang:1.25-alpine AS xcli-builder
+RUN apk add --no-cache git
+WORKDIR /build
+RUN git clone --depth 1 https://github.com/Gladium-AI/x-cli.git . \
+ && go build -o x-cli .
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    gcc g++ build-essential curl wget \
-    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DATA_DIR=/app/data
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        gcc g++ build-essential curl \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
-COPY main.py .
-COPY memory.py .
-COPY web_search.py .
+COPY --from=xcli-builder /build/x-cli /usr/local/bin/x-cli
+
+# Application code (one module per concern)
+COPY *.py ./
+COPY static ./static
+
+RUN mkdir -p /app/data/chroma /app/data/conversations /app/data/finetune
 
 EXPOSE 8030
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD curl -fsS http://localhost:8030/health > /dev/null || exit 1
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8030", "--workers", "1"]
