@@ -54,6 +54,7 @@ class Config:
     classifier_timeout: float
     context_char_limit: int
     max_inject_chars: int
+    num_ctx: int
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -85,6 +86,7 @@ CFG = Config(
     classifier_timeout=float(os.getenv("CLASSIFIER_TIMEOUT", "4.0")),
     context_char_limit=int(os.getenv("CONTEXT_CHAR_LIMIT", "12000")),
     max_inject_chars=int(os.getenv("MAX_INJECT_CHARS", "5000")),
+    num_ctx=int(os.getenv("NUM_CTX", "8192")),
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

@@ -72,10 +72,10 @@ pre code { background: none; padding: 0; }
   grid-template-columns: 260px 1fr;
   height: 100vh;
 }
-#app.sidebar-collapsed { grid-template-columns: 0 1fr; }
+#app.sidebar-collapsed { grid-template-columns: 1fr; }
 #app.sidebar-collapsed .sidebar { display: none; }
 #app.with-sources { grid-template-columns: 260px 1fr 320px; }
-#app.with-sources.sidebar-collapsed { grid-template-columns: 0 1fr 320px; }
+#app.with-sources.sidebar-collapsed { grid-template-columns: 1fr 320px; }
 
 /* ───────────────── Sidebar ───────────────── */
 .sidebar {
@@ -259,6 +259,12 @@ pre code { background: none; padding: 0; }
 .badge.search { background: var(--accent-soft); color: var(--accent-strong); border-color: rgba(124,92,255,0.3); }
 .badge.x { background: rgba(29, 161, 242, 0.12); color: #5db8ff; border-color: rgba(29,161,242,0.3); }
 .badge.memory { background: rgba(74,222,128,0.1); color: var(--green); border-color: rgba(74,222,128,0.3); }
+button.badge.clickable {
+  cursor: pointer; font-family: inherit;
+  transition: filter 80ms, transform 60ms;
+}
+button.badge.clickable:hover { filter: brightness(1.2); }
+button.badge.clickable:active { transform: translateY(1px); }
 .msg-content {
   color: var(--text); font-size: 14.5px; line-height: 1.62;
   word-wrap: break-word;
@@ -289,6 +295,32 @@ pre code { background: none; padding: 0; }
   margin-left: 1px;
 }
 @keyframes blink { 50% { opacity: 0; } }
+
+.msg-feedback {
+  display: flex; gap: 4px; margin-top: 8px;
+  opacity: 0.45; transition: opacity 120ms;
+}
+.msg:hover .msg-feedback { opacity: 1; }
+.fb-btn {
+  width: 26px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--text-2); background: transparent;
+  border: 1px solid transparent;
+  transition: background 80ms, color 80ms, border-color 80ms;
+}
+.fb-btn:hover { background: var(--surface-2); color: var(--text); }
+.fb-btn.active {
+  background: var(--accent-soft); color: var(--text);
+  border-color: var(--accent); opacity: 1;
+}
+.msg-feedback:has(.fb-btn.active) { opacity: 1; }
+
+.distill-actions {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 8px; flex-wrap: wrap;
+}
+.distill-actions small { flex: 1; min-width: 200px; }
 
 /* ───────────────── Composer ───────────────── */
 .composer {

@@ -86,18 +86,46 @@ def update(conv: dict) -> None:
         _persist(conv)
 
 
-def append_message(conv_id: str, role: str, content: str) -> dict | None:
+def append_message(conv_id: str, role: str, content: str,
+                   message_id: str | None = None) -> dict | None:
     with _lock:
         _load_all()
         conv = _cache.get(conv_id)
         if not conv:
             return None
-        conv["messages"].append({"role": role, "content": content})
+        msg: dict = {"role": role, "content": content}
+        if message_id:
+            msg["message_id"] = message_id
+        conv["messages"].append(msg)
         if role == "assistant":
             conv["turn_count"] += 1
         conv["updated_at"] = _now()
         _persist(conv)
         return conv
+
+
+def set_feedback(conv_id: str, message_id: str, rating: str | None,
+                 note: str | None = None) -> bool:
+    """rating in {'up','down', None}. None removes the feedback. Returns True if updated."""
+    with _lock:
+        _load_all()
+        conv = _cache.get(conv_id)
+        if not conv:
+            return False
+        for m in conv["messages"]:
+            if m.get("message_id") == message_id:
+                if rating is None:
+                    m.pop("feedback", None)
+                else:
+                    m["feedback"] = {
+                        "rating": rating,
+                        "note": note,
+                        "at": _now(),
+                    }
+                conv["updated_at"] = _now()
+                _persist(conv)
+                return True
+        return False
 
 
 def pop_last(conv_id: str) -> None:

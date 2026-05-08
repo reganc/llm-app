@@ -81,7 +81,7 @@ services:
       - MEMORY_TOP_K=5
       # Web search
       - SEARCH_ENABLED=true
-      - SEARCH_ALWAYS=true
+      - SEARCH_ALWAYS=false
       - SEARXNG_URL=http://searxng:8080
       - AUTO_SEARCH_THRESHOLD=0.35
       - SEARCH_RESULTS=5
@@ -98,8 +98,11 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - app_data:/app/data
+      # Live-reload: edits to api/*.py and api/static/* take effect without rebuild
+      - ./api:/app
       # x-cli credentials (only needed if X_SEARCH_ENABLED=true)
       - ${HOME}/.x-cli:/root/.x-cli:ro
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8030", "--reload"]
     depends_on:
       ollama:
         condition: service_healthy

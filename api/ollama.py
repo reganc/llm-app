@@ -53,6 +53,7 @@ def build_payload(messages: list[dict], model: str, *, temperature: float = 0.7,
             "temperature": temperature,
             "num_predict": max_tokens,
             "top_p": top_p,
+            "num_ctx": CFG.num_ctx,
             "stop": stop or [],
         },
     }

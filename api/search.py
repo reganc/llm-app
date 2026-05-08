@@ -248,6 +248,59 @@ async def _empty() -> list:
     return []
 
 
+# ── Intent detection (deterministic, no LLM) ────────────────────────────────
+_FORCE_SEARCH_RE = re.compile(
+    r"\b("
+    r"search (the web )?for|search up|look (it |that |this )?up|google (it|for|this)|"
+    r"find (me )?(the )?(latest|current|recent|most recent|newest)|"
+    r"latest|current|currently|today|today'?s|tonight|tonight'?s|right now|live|breaking|"
+    r"recent|recently|this (week|month|hour|morning|afternoon|evening)|"
+    r"what'?s (happening|new|going on|the latest)|"
+    r"in the news|news about|news on|news of|"
+    r"as of (now|today)|up.to.date|real.?time|"
+    r"happening (now|today|right now)|"
+    r"price(s)? (of|for|right now|today)|stock (price|quote)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_FORCE_X_RE = re.compile(
+    r"\b("
+    r"tweet(s|ed|ing)?|twitter|"
+    r"x post|x posts|x update|x updates|x thread|x threads|"
+    r"on x\b|posted on x|said on x|"
+    r"@[a-zA-Z0-9_]{2,15}\b|"
+    r"x\.com/"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def detect_intent(query: str) -> dict:
+    """Fast, deterministic signal extraction. No LLM. Returns flags + matched signals."""
+    if not query or not query.strip():
+        return {"force_search": False, "force_x": False, "signals": []}
+    signals: list[str] = []
+    force_search = False
+    force_x = False
+    for m in _FORCE_SEARCH_RE.finditer(query):
+        signals.append(m.group(0).lower())
+        force_search = True
+    for m in _FORCE_X_RE.finditer(query):
+        signals.append(m.group(0).lower())
+        force_x = True
+    if force_x:
+        force_search = True  # X queries always need a fresh fetch
+    # Dedupe while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for s in signals:
+        if s not in seen:
+            seen.add(s)
+            unique.append(s)
+    return {"force_search": force_search, "force_x": force_x, "signals": unique[:6]}
+
+
 # ── Auto-search decision ─────────────────────────────────────────────────────
 _CLASSIFIER_PROMPT = """\
 You are a query router. Decide whether the question below requires CURRENT information \

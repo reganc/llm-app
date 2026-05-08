@@ -125,7 +125,8 @@ async def store_knowledge(text: str, *, title: str, source_type: str,
 
 
 async def store_conversation_turn(conv_id: str, conv_name: str,
-                                  user_msg: str, assistant_msg: str) -> None:
+                                  user_msg: str, assistant_msg: str,
+                                  message_id: str | None = None) -> None:
     if not CFG.memory_enabled:
         return
     try:
@@ -135,22 +136,159 @@ async def store_conversation_turn(conv_id: str, conv_name: str,
     text = f"Conversation: {conv_name}\nUser: {user_msg}\nAssistant: {assistant_msg}"
     chunk_id = f"conv_{conv_id}_{int(time.time() * 1000)}"
     now = datetime.now(timezone.utc).isoformat()
+    metadata: dict = {
+        "source_id": conv_id,
+        "source_type": "conversation",
+        "title": conv_name,
+        "identifier": conv_id,
+        "timestamp": now,
+    }
+    if message_id:
+        metadata["message_id"] = message_id
     try:
         emb = await oll.embed(text)
         col.add(
             ids=[chunk_id],
             embeddings=[emb],
             documents=[text],
-            metadatas=[{
-                "source_id": conv_id,
-                "source_type": "conversation",
-                "title": conv_name,
-                "identifier": conv_id,
-                "timestamp": now,
-            }],
+            metadatas=[metadata],
         )
     except Exception as e:
         log.warning("conv turn store failed: %s", e)
+
+
+# ── Feedback ─────────────────────────────────────────────────────────────────
+def update_feedback(message_id: str, rating: str | None) -> int:
+    """Stamp `feedback_rating` on every Chroma chunk tagged with this message_id.
+    rating in {'up','down', None}. None clears the rating. Returns updated count."""
+    if not CFG.memory_enabled or not message_id:
+        return 0
+    try:
+        _, _, c_col = _ensure()
+    except Exception:
+        return 0
+    try:
+        existing = c_col.get(where={"message_id": message_id},
+                             include=["metadatas"])
+    except Exception as e:
+        log.warning("feedback lookup failed: %s", e)
+        return 0
+    ids = existing.get("ids") or []
+    if not ids:
+        return 0
+    metas = existing.get("metadatas") or []
+    now = datetime.now(timezone.utc).isoformat()
+    new_metas: list[dict] = []
+    for m in metas:
+        m = dict(m or {})
+        if rating is None:
+            m.pop("feedback_rating", None)
+            m.pop("feedback_at", None)
+        else:
+            m["feedback_rating"] = rating
+            m["feedback_at"] = now
+        new_metas.append(m)
+    try:
+        c_col.update(ids=ids, metadatas=new_metas)
+    except Exception as e:
+        log.warning("feedback update failed: %s", e)
+        return 0
+    return len(ids)
+
+
+def pending_distill_chunks(limit: int = 20) -> list[dict]:
+    """Conversation chunks rated 'up' that have not yet been distilled."""
+    if not CFG.memory_enabled:
+        return []
+    try:
+        _, _, c_col = _ensure()
+    except Exception:
+        return []
+    try:
+        res = c_col.get(where={"feedback_rating": "up"},
+                        include=["documents", "metadatas"])
+    except Exception as e:
+        log.warning("pending_distill query failed: %s", e)
+        return []
+    out: list[dict] = []
+    for cid, doc, meta in zip(res.get("ids") or [],
+                              res.get("documents") or [],
+                              res.get("metadatas") or []):
+        meta = meta or {}
+        if meta.get("distilled"):
+            continue
+        out.append({
+            "chunk_id": cid,
+            "message_id": meta.get("message_id"),
+            "title": meta.get("title", ""),
+            "document": doc or "",
+            "timestamp": meta.get("timestamp", ""),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def mark_distilled(chunk_ids: list[str]) -> int:
+    if not CFG.memory_enabled or not chunk_ids:
+        return 0
+    try:
+        _, _, c_col = _ensure()
+        existing = c_col.get(ids=chunk_ids, include=["metadatas"])
+    except Exception as e:
+        log.warning("mark_distilled lookup failed: %s", e)
+        return 0
+    ids = existing.get("ids") or []
+    metas = existing.get("metadatas") or []
+    now = datetime.now(timezone.utc).isoformat()
+    new_metas: list[dict] = []
+    for m in metas:
+        m = dict(m or {})
+        m["distilled"] = True
+        m["distilled_at"] = now
+        new_metas.append(m)
+    try:
+        c_col.update(ids=ids, metadatas=new_metas)
+        return len(ids)
+    except Exception as e:
+        log.warning("mark_distilled update failed: %s", e)
+        return 0
+
+
+def pending_distill_count() -> int:
+    if not CFG.memory_enabled:
+        return 0
+    try:
+        _, _, c_col = _ensure()
+        res = c_col.get(where={"feedback_rating": "up"}, include=["metadatas"])
+    except Exception:
+        return 0
+    return sum(1 for m in (res.get("metadatas") or []) if not (m or {}).get("distilled"))
+
+
+def feedback_stats() -> dict:
+    if not CFG.memory_enabled:
+        return {"available": False, "up": 0, "down": 0, "total_rated": 0}
+    try:
+        _, _, c_col = _ensure()
+        if not c_col.count():
+            return {"available": True, "up": 0, "down": 0, "total_rated": 0}
+        meta = c_col.get(include=["metadatas"])
+    except Exception as e:
+        return {"available": False, "error": str(e)}
+    up = down = 0
+    seen_msgs: set[str] = set()
+    for m in meta.get("metadatas", []) or []:
+        mid = (m or {}).get("message_id")
+        rating = (m or {}).get("feedback_rating")
+        if not mid or mid in seen_msgs or not rating:
+            continue
+        seen_msgs.add(mid)
+        if rating == "up":
+            up += 1
+        elif rating == "down":
+            down += 1
+    return {"available": True, "up": up, "down": down, "total_rated": up + down}
 
 
 # ── Retrieve ─────────────────────────────────────────────────────────────────
@@ -173,12 +311,22 @@ async def retrieve(query: str, *, top_k: int | None = None,
 
     def _ingest(qres, collection: str, source_override: str | None = None):
         for doc, meta, dist in zip(qres["documents"][0], qres["metadatas"][0], qres["distances"][0]):
+            base = round(1 - dist, 4)
+            rating = (meta or {}).get("feedback_rating")
+            if rating == "up":
+                score = round(base * 1.3, 4)
+            elif rating == "down":
+                score = round(base * 0.3, 4)
+            else:
+                score = base
             out.append({
                 "text": doc,
                 "title": meta.get("title", ""),
                 "source_type": source_override or meta.get("source_type", ""),
                 "identifier": meta.get("identifier", ""),
-                "score": round(1 - dist, 4),
+                "score": score,
+                "base_score": base,
+                "feedback_rating": rating,
                 "timestamp": meta.get("timestamp", ""),
                 "collection": collection,
             })

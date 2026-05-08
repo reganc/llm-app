@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import conversations as conv_store
+import distill
 import finetune
 import memory as mem
 import ollama as oll
@@ -24,6 +25,8 @@ from admin_routes import router as admin_router
 from chat import metrics
 from chat import router as chat_router
 from config import CFG, STATIC_DIR, get_active_model
+from distill import router as distill_router
+from feedback import router as feedback_router
 from finetune import router as finetune_router
 from ingest import router as ingest_router
 
@@ -41,7 +44,15 @@ async def lifespan(app: FastAPI):
 
     # Wait for Ollama to be reachable, then pull required models
     asyncio.create_task(_warmup())
-    yield
+    distill_task = asyncio.create_task(distill.scheduler_loop())
+    try:
+        yield
+    finally:
+        distill_task.cancel()
+        try:
+            await distill_task
+        except (asyncio.CancelledError, Exception):
+            pass
     log.info("shutting down")
 
 
@@ -99,6 +110,8 @@ app.include_router(chat_router)
 app.include_router(admin_router)
 app.include_router(ingest_router)
 app.include_router(finetune_router)
+app.include_router(feedback_router)
+app.include_router(distill_router)
 
 
 # ── Health / metrics (no auth) ───────────────────────────────────────────────
