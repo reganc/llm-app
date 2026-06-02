@@ -126,9 +126,12 @@ class ReasoningRequest(BaseModel):
 class CompletionRequest(BaseModel):
     model: str = Field(default_factory=get_active_model)
     prompt: str
+    system: str | None = None
     stream: bool = False
     temperature: float = 0.7
     max_tokens: int = 512
+
+    model_config = {"extra": "ignore"}
 
 
 class ConversationCreateRequest(BaseModel):
@@ -821,8 +824,9 @@ async def reasoning(req: ReasoningRequest):
 async def completions(req: CompletionRequest):
     metrics["total_requests"] += 1
     try:
-        data = await oll.generate(req.prompt, model=req.model,
-                                  temperature=req.temperature, max_tokens=req.max_tokens)
+        data = await oll.generate(req.prompt, model=req.model, system=req.system,
+                                  temperature=req.temperature, max_tokens=req.max_tokens,
+                                  num_ctx=CFG.num_ctx)
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
         return {
             "id": f"cmpl-{int(time.time())}",

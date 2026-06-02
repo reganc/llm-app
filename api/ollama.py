@@ -75,14 +75,20 @@ async def chat(payload: dict, *, timeout: float = 180.0) -> dict:
         return r.json()
 
 
-async def generate(prompt: str, *, model: str | None = None, temperature: float = 0.7,
-                   max_tokens: int = 512) -> dict:
-    payload = {
+async def generate(prompt: str, *, model: str | None = None, system: str | None = None,
+                   temperature: float = 0.7, max_tokens: int = 512,
+                   num_ctx: int | None = None) -> dict:
+    options: dict = {"temperature": temperature, "num_predict": max_tokens}
+    if num_ctx:
+        options["num_ctx"] = num_ctx
+    payload: dict = {
         "model": normalize_model(model or CFG.default_model),
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": temperature, "num_predict": max_tokens},
+        "options": options,
     }
+    if system:
+        payload["system"] = system
     async with httpx.AsyncClient(timeout=120.0) as client:
         r = await client.post(f"{CFG.ollama_url}/api/generate", json=payload)
         r.raise_for_status()
