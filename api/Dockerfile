@@ -23,13 +23,21 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Install Chromium + all system libs Playwright needs at runtime. Crawl4AI's
+# setup CLI is the supported one-liner: it runs `playwright install --with-deps
+# chromium` and primes the local model/db files crawl4ai uses on first run.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    CRAWL4AI_DB_PATH=/app/data/crawl4ai
+RUN python -m playwright install --with-deps chromium \
+ && (crawl4ai-setup || true)
+
 COPY --from=xcli-builder /build/x-cli /usr/local/bin/x-cli
 
 # Application code (one module per concern)
 COPY *.py ./
 COPY static ./static
 
-RUN mkdir -p /app/data/chroma /app/data/conversations /app/data/finetune
+RUN mkdir -p /app/data/conversations /app/data/finetune
 
 EXPOSE 8030
 

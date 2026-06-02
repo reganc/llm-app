@@ -92,8 +92,9 @@ for i in $(seq 1 30); do
 done
 
 # ── 10. Pull model ────────────────────────────────────────────
-info "Pulling Mistral 7B Q4_K_M (~4.1 GB download)..."
-docker exec ollama ollama pull mistral:7b-instruct-q4_K_M
+MODEL_TO_PULL="${DEFAULT_MODEL:-huihui_ai/qwen2.5-abliterate:14b}"
+info "Pulling ${MODEL_TO_PULL} (~9 GB download)..."
+docker exec ollama ollama pull "${MODEL_TO_PULL}"
 success "Model downloaded and ready!"
 
 # ── 11. Done ──────────────────────────────────────────────────

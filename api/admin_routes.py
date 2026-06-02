@@ -58,6 +58,9 @@ async def get_settings():
 async def patch_settings(body: SettingsPatch):
     if body.default_model is not None:
         set_setting("default_model", body.default_model)
+        # Refresh the Ollama-side "default" alias so direct Ollama clients
+        # picking up model="default" hit the new model on the next request.
+        await oll.copy_model(body.default_model, "default")
     if body.default_system_prompt_key is not None:
         if body.default_system_prompt_key not in SYSTEM_PROMPTS:
             raise HTTPException(400, "Unknown system_prompt_key")
@@ -193,7 +196,7 @@ async def x_search_route(req: XSearchRequest):
 # ── Memory admin ─────────────────────────────────────────────────────────────
 @router.get("/memory/stats")
 async def memory_stats():
-    return mem.get_stats()
+    return await mem.get_stats()
 
 
 @router.get("/memory/search")
@@ -209,15 +212,15 @@ async def memory_sources(q: str = "", source_type: str = "",
                          limit: int = 200, offset: int = 0):
     if not CFG.memory_enabled:
         raise HTTPException(503, "Memory not enabled")
-    return mem.list_sources(query=q, source_type=source_type,
-                            limit=limit, offset=offset)
+    return await mem.list_sources(query=q, source_type=source_type,
+                                  limit=limit, offset=offset)
 
 
 @router.get("/memory/source/{source_id}")
 async def memory_get_source(source_id: str):
     if not CFG.memory_enabled:
         raise HTTPException(503, "Memory not enabled")
-    res = mem.get_source(source_id)
+    res = await mem.get_source(source_id)
     if not res.get("available"):
         raise HTTPException(503, res.get("error", "Memory unavailable"))
     if not res.get("found"):
@@ -229,7 +232,21 @@ async def memory_get_source(source_id: str):
 async def memory_delete(source_id: str):
     if not CFG.memory_enabled:
         raise HTTPException(503, "Memory not enabled")
-    return mem.delete_source(source_id)
+    return await mem.delete_source(source_id)
+
+
+class MemoryWipeRequest(BaseModel):
+    confirm: str = Field(..., description="Must equal 'WIPE' to proceed")
+    include_conversations: bool = True
+
+
+@router.post("/memory/wipe")
+async def memory_wipe(req: MemoryWipeRequest):
+    if not CFG.memory_enabled:
+        raise HTTPException(503, "Memory not enabled")
+    if req.confirm != "WIPE":
+        raise HTTPException(400, "confirm must be exactly 'WIPE'")
+    return await mem.wipe(include_conversations=req.include_conversations)
 
 
 @router.post("/memory/ingest")

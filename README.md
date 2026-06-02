@@ -1,9 +1,10 @@
 # 🤖 Local LLM Stack — RTX 3060
 
-**Mistral 7B Q4_K_M · Ollama · Open WebUI · Custom FastAPI**
+**Qwen2.5 14B Abliterated · Ollama · Postgres+pgvector · FastAPI + SPA**
 
 Full local AI stack optimized for the RTX 3060 (12GB VRAM).
-No cloud. No API costs. ~35–50 tokens/sec.
+No cloud. No API costs. Downstream apps reference one stable alias
+(`model: "default"`) so model upgrades happen server-side with zero client edits.
 
 ---
 
@@ -14,15 +15,15 @@ No cloud. No API costs. ~35–50 tokens/sec.
 │                     Your Machine                        │
 │                                                         │
 │  ┌──────────────┐    ┌──────────────┐                  │
-│  │  Open WebUI  │    │  Your App /  │                  │
-│  │  :3000       │    │  curl / SDK  │                  │
+│  │  SPA (built  │    │  Your App /  │                  │
+│  │  in @ :8030) │    │  curl / SDK  │                  │
 │  └──────┬───────┘    └──────┬───────┘                  │
-│         │                   │                           │
+│         │  model:"default"  │                           │
 │         └─────────┬─────────┘                          │
 │                   ▼                                     │
 │         ┌──────────────────┐                           │
-│         │  FastAPI Wrapper │  ← OpenAI-compatible API  │
-│         │  :8030           │    /v1/chat/completions   │
+│         │  FastAPI         │  ← resolves "default"     │
+│         │  :8030           │    to active model        │
 │         └────────┬─────────┘                           │
 │                  │                                      │
 │         ┌────────▼─────────┐                           │
@@ -31,28 +32,28 @@ No cloud. No API costs. ~35–50 tokens/sec.
 │         └────────┬─────────┘                           │
 │                  │                                      │
 │         ┌────────▼─────────┐                           │
-│         │  Mistral 7B      │  ← Q4_K_M quantized       │
-│         │  Q4_K_M GGUF     │    6.5 GB VRAM            │
+│         │ Qwen2.5 14B      │  ← Q4_K_M GGUF            │
+│         │ abliterated      │    ~9 GB VRAM             │
 │         └──────────────────┘                           │
 │                  │                                      │
 │         ┌────────▼─────────┐                           │
 │         │   RTX 3060       │  ← 12 GB VRAM             │
-│         │   (CUDA 12.x)    │    ~35–50 tok/s           │
+│         │   (CUDA 12.x)    │                            │
 │         └──────────────────┘                           │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Why Mistral 7B Q4_K_M on the RTX 3060?
+## Why Qwen2.5 14B Abliterated on the RTX 3060?
 
-| Model             | VRAM   | Quality | Speed      | Verdict      |
-|:------------------|:-------|:--------|:-----------|:-------------|
-| Mistral 7B Q4_K_M | ~6.5GB | ★★★★☆   | ~40 tok/s  | ✅ **Best**  |
-| Llama 3 8B Q4_K_M | ~6.6GB | ★★★★☆   | ~38 tok/s  | ✅ Great alt |
-| Gemma 2 9B Q4_K_M | ~7.2GB | ★★★★☆   | ~32 tok/s  | ⚠️ Tight    |
-| Mistral 7B Q8     | ~8.5GB | ★★★★★   | ~25 tok/s  | ⚠️ Slower   |
-| Llama 3 70B Q2    | ~26GB  | ★★★☆☆   | ✗ OOM      | ❌ Too big  |
+| Model                              | VRAM   | Notes                                     |
+|:-----------------------------------|:-------|:------------------------------------------|
+| **huihui_ai/qwen2.5-abliterate:14b** | ~9 GB  | ✅ **Active default.** No thinking blocks, strong general purpose, leaves room for KV cache |
+| qwen2.5:14b-instruct-q4_K_M        | ~9 GB  | Vanilla (non-abliterated) drop-in         |
+| huihui_ai/qwen3-abliterated:14b    | ~9 GB  | Newer; emits `<think>` blocks (server strips via `/no_think`) |
+| mistral-nemo:12b-instruct          | ~7 GB  | 128k context, slightly weaker reasoning   |
 
-Q4_K_M is the sweet spot: near-full quality at 4-bit with K-quant middle weighting.
+To swap: `PATCH /v1/settings {"default_model": "<tag>"}` — no client code changes
+needed since every consumer requests `model: "default"`.
 
 ---
 
@@ -73,7 +74,7 @@ This will:
 - Install Docker + Docker Compose
 - Install NVIDIA Container Toolkit (GPU passthrough)
 - Pull all Docker images
-- Download Mistral 7B Q4_K_M (~4.1 GB)
+- Download the active model (~9 GB for Qwen2.5 14B)
 - Start all services
 
 ### 2. Access
@@ -99,7 +100,7 @@ curl http://localhost:8030/v1/chat/completions \
   -H "Authorization: Bearer change-me-in-production" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "mistral:7b-instruct-q4_K_M",
+    "model": "default",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "Explain quantum computing in simple terms."}
@@ -114,7 +115,7 @@ curl http://localhost:8030/v1/chat/completions \
 curl http://localhost:8030/v1/chat/completions \
   -H "Authorization: Bearer change-me-in-production" \
   -H "Content-Type: application/json" \
-  -d '{"model": "mistral:7b-instruct-q4_K_M", "messages": [{"role": "user", "content": "Tell me a story"}], "stream": true}'
+  -d '{"model": "default", "messages": [{"role": "user", "content": "Tell me a story"}], "stream": true}'
 ```
 
 ### Python (OpenAI SDK — drop-in compatible)
@@ -127,7 +128,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="mistral:7b-instruct-q4_K_M",
+    model="default",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(response.choices[0].message.content)
@@ -143,7 +144,7 @@ const client = new OpenAI({
 });
 
 const response = await client.chat.completions.create({
-  model: "mistral:7b-instruct-q4_K_M",
+  model: "default",
   messages: [{ role: "user", content: "Hello!" }],
 });
 console.log(response.choices[0].message.content);
@@ -153,16 +154,23 @@ console.log(response.choices[0].message.content);
 
 ## Switching Models
 
+Downstream apps request `model: "default"` and never name a specific tag.
+Swapping is a one-step server-side operation:
+
 ```bash
-# Pull an alternative model
-docker exec ollama ollama pull llama3:8b-instruct-q4_K_M
+# 1. Pull the new model
+docker exec ollama ollama pull <new-tag>
 
-# List available models
+# 2. Activate it (persisted to /app/data/settings.json)
+curl -X PATCH http://localhost:8030/v1/settings \
+  -H "Authorization: Bearer change-me-in-production" \
+  -H "Content-Type: application/json" \
+  -d '{"default_model":"<new-tag>"}'
+
+# Or set DEFAULT_MODEL in .env and `docker compose restart api`
+
+# List what's loaded
 docker exec ollama ollama list
-
-# Update default in docker-compose.yml:
-# DEFAULT_MODEL=llama3:8b-instruct-q4_K_M
-# Then: docker compose restart api open-webui
 ```
 
 ---
@@ -214,9 +222,13 @@ environment:
 ```
 
 ### If you run out of VRAM
-Switch to a smaller quantization:
+Switch to a smaller quant or a smaller model, then activate it via
+`/v1/settings`:
 ```bash
-docker exec ollama ollama pull mistral:7b-instruct-q3_K_M  # ~5.1 GB VRAM
+docker exec ollama ollama pull huihui_ai/qwen2.5-abliterate:7b   # ~5 GB VRAM
+curl -X PATCH http://localhost:8030/v1/settings \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{"default_model":"huihui_ai/qwen2.5-abliterate:7b"}'
 ```
 
 ---
@@ -231,7 +243,7 @@ sudo systemctl restart docker
 
 **Model download fails:**
 ```bash
-docker exec -it ollama ollama pull mistral:7b-instruct-q4_K_M
+docker exec -it ollama ollama pull huihui_ai/qwen2.5-abliterate:14b
 ```
 
 **Port already in use:**

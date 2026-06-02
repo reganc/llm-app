@@ -445,15 +445,41 @@ button.badge.clickable:active { transform: translateY(1px); }
 .toast.error::before {
   content: "✕"; color: var(--red); margin-right: 8px; font-weight: 700;
 }
+.toast.with-action {
+  display: inline-flex; align-items: center; gap: 12px;
+  padding-right: 8px;
+}
+.toast.with-action .toast-msg { flex: 1; }
+.toast-action {
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease-out, border-color 120ms ease-out;
+}
+.toast-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--accent);
+}
 
 /* ───────────────── Library modal ───────────────── */
+/* `display: flex` must only apply while the dialog is open — otherwise it
+ * overrides the user-agent `dialog:not([open]) { display: none }` rule and
+ * the modal stays visible after .close() (the X and Ask-in-chat both call
+ * close() but the modal refuses to disappear). */
 .modal.library {
   max-width: min(1100px, 96vw);
   width: 96vw;
   height: min(82vh, 760px);
   padding: 0;
-  display: flex; flex-direction: column;
   overflow: hidden;
+}
+.modal.library[open] {
+  display: flex; flex-direction: column;
 }
 .library-head {
   display: flex; align-items: center; justify-content: space-between;

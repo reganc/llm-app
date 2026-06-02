@@ -22,6 +22,188 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; llm-research-bot/1.0)"}
 _SEARXNG_HEADERS = {**_HEADERS, "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1"}
 
 
+# ── Query-focused excerpting ────────────────────────────────────────────────
+# Stop-words we don't count when scoring paragraph relevance.
+_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "of", "to", "in", "on", "at",
+    "by", "for", "with", "as", "from", "up", "down", "and", "or", "but",
+    "if", "then", "than", "this", "that", "these", "those", "what", "when",
+    "where", "why", "how", "which", "who", "whom", "i", "you", "we", "they",
+    "it", "its", "his", "her", "their", "my", "our", "your", "would",
+    "could", "should", "will", "shall", "may", "might", "can", "today",
+    "current", "currently", "latest", "now",
+}
+
+# Words in the user's query that signal they want a numeric / factual datum
+# — when present, paragraphs containing currency symbols, units, or digit
+# clusters are heavily up-weighted.
+_NUMERIC_INTENT_RE = re.compile(
+    r"\b("
+    r"price|cost|rate|spot|level|value|worth|"
+    r"yield|return|change|"
+    r"close|open|high|low|"
+    r"score|count|share|stake|cap(italization)?|"
+    r"how (much|many|long|tall|big|deep|fast|hot|cold)|"
+    r"what(?:'?s|s| is| was| were) the"
+    r")\b",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_CURRENCY_RE = re.compile(
+    r"[$€£¥₹]|\bUSD\b|\bEUR\b|\bGBP\b|\bJPY\b|\bCNY\b|"
+    r"\b(?:per|/)\s*(?:oz|ounce|gram|kg|lb|barrel|share|unit)\b",
+    re.IGNORECASE,
+)
+_PARA_SPLIT_RE = re.compile(r"\n\s*\n+")
+
+# Phrases that mark a paragraph as describing CURRENT state (boost when the
+# query has numeric intent, since we want the latest price, not a record).
+_PRESENT_TENSE_RE = re.compile(
+    r"\b(now|today|currently|current|spot|live|real[-\s]?time|"
+    r"as of (?:today|now|\d{1,2})|right now|latest|"
+    r"intraday|moments? ago|minutes? ago|hour[s]? ago)\b",
+    re.IGNORECASE,
+)
+# Phrases that mark a paragraph as describing HISTORICAL data (penalize for
+# numeric-intent queries — the user asked "what is X now", not "what was X").
+# NOTE: bare year references (e.g. "in 2026") are matched separately at scoring
+# time so we can compare against the CURRENT year — penalizing only past years.
+_HISTORY_RE = re.compile(
+    r"\b("
+    r"back in \d{4}|"
+    r"during the \d{4}s|"
+    r"\bhistory\b|historical|historically|"
+    r"all[-\s]?time (?:high|low|record)|"
+    r"nominal (?:high|low|record)|"
+    r"milestone|previously|past (?:year|decade|century)|"
+    r"\d+ years? ago|years? ago, (?:gold|silver|platinum|the price)"
+    r")\b",
+    re.IGNORECASE,
+)
+# Bare years — checked against current year, penalty only when the year is
+# older than today. "In 2026" on a 2026-current page is fine; "in 2020" is
+# clearly retrospective.
+_BARE_YEAR_RE = re.compile(r"\b(?:in|during|back in|since)\s+((?:19|20)\d{2})\b",
+                           re.IGNORECASE)
+
+
+def _query_terms(query: str) -> list[str]:
+    """Significant lowercase query terms (≥2 chars, non-stopword)."""
+    if not query:
+        return []
+    words = re.findall(r"[A-Za-z][A-Za-z0-9'\-]+", query.lower())
+    return [w for w in words if len(w) >= 2 and w not in _STOPWORDS]
+
+
+def _current_year() -> int:
+    """Today's year, computed lazily so the value is fresh per call."""
+    return datetime.now(timezone.utc).year
+
+
+def _focused_excerpt(text: str, query: str, target_chars: int) -> str:
+    """Return a relevance-ranked excerpt of ``text`` ≤ ``target_chars`` chars.
+
+    Strategy: split into paragraphs; score each by query-term overlap and
+    (when the query has numeric intent) by digit/currency/unit density;
+    greedily pick highest scorers, then re-emit them in source order with
+    " […] " between non-adjacent picks. This avoids the head-truncation
+    pathology where nav, cookie banners, and marketing copy occupy the first
+    1500 chars and the actual datum (price, level, status) sits below the
+    fold.
+    """
+    if not text:
+        return ""
+    text = text.strip()
+    if len(text) <= target_chars:
+        return text
+
+    paras = [p.strip() for p in _PARA_SPLIT_RE.split(text) if p.strip()]
+    if len(paras) <= 1:
+        # Fallback: split on single newlines so single-block pages still excerpt.
+        paras = [p.strip() for p in text.split("\n") if p.strip()]
+    if not paras:
+        return text[:target_chars]
+
+    terms = _query_terms(query)
+    numeric_intent = bool(_NUMERIC_INTENT_RE.search(query)) if query else False
+    this_year = _current_year() if numeric_intent else 0
+
+    scored: list[tuple[int, float, str]] = []
+    for idx, p in enumerate(paras):
+        plow = p.lower()
+        # Overlap: count distinct query terms present (not raw frequency, so
+        # a paragraph repeating one keyword doesn't drown out one that
+        # mentions several).
+        hit_terms = sum(1 for t in terms if t in plow)
+        score = hit_terms * 3.0
+        if numeric_intent:
+            n_numbers = len(_NUMBER_RE.findall(p))
+            n_currency = len(_CURRENCY_RE.findall(p))
+            score += min(n_numbers, 6) * 1.0
+            score += n_currency * 2.5
+            # Recency bias: when the user wants the LATEST/CURRENT value,
+            # heavily favor paragraphs marked as present-tense and demote
+            # paragraphs that read as historical narrative. Live-price
+            # tracker pages bury the live number in JS-rendered tables,
+            # so trafilatura's static-HTML extract is dominated by
+            # historical prose. Without this bias, those win on numeric
+            # density and the model gets fed only old data.
+            if _PRESENT_TENSE_RE.search(p):
+                score += 4.0
+            history_hits = len(_HISTORY_RE.findall(p))
+            if history_hits:
+                score -= 2.0 * history_hits
+            # Year-based penalty — only when the year is OLDER than today.
+            # "in 2026" on a 2026-current page is the live context, not a
+            # retrospective; we don't want to bury current-year paragraphs.
+            for ym in _BARE_YEAR_RE.finditer(p):
+                year = int(ym.group(1))
+                if year < this_year:
+                    # Older years scale up the penalty linearly with age.
+                    score -= 1.5 + min(this_year - year, 30) * 0.15
+        # Slight bias toward shorter paragraphs (more datum, less prose).
+        if 40 <= len(p) <= 600:
+            score += 0.5
+        # Light recency-of-position bias to break ties: earlier paras
+        # win when scores tie, since news pages put the lede up top.
+        score -= idx * 0.01
+        scored.append((idx, score, p))
+
+    # Always include any paragraph that scored > 0; if budget allows, fill
+    # with high-scoring remainder. If NOTHING scored, fall back to the head.
+    positive = [s for s in scored if s[1] > 0.5]
+    if not positive:
+        return text[:target_chars]
+    positive.sort(key=lambda s: s[1], reverse=True)
+
+    picked: dict[int, str] = {}
+    used = 0
+    for idx, _score, p in positive:
+        # +6 accounts for joiner " […] " between non-adjacent.
+        cost = len(p) + 6
+        if used + cost > target_chars and picked:
+            break
+        picked[idx] = p
+        used += cost
+        if used >= target_chars:
+            break
+
+    if not picked:
+        return text[:target_chars]
+    out_parts: list[str] = []
+    last_idx = -2
+    for idx in sorted(picked):
+        if last_idx >= 0 and idx != last_idx + 1:
+            out_parts.append("[…]")
+        out_parts.append(picked[idx])
+        last_idx = idx
+    excerpt = "\n\n".join(out_parts)
+    if len(excerpt) > target_chars:
+        excerpt = excerpt[:target_chars].rstrip() + "…"
+    return excerpt
+
+
 # ── Auxiliary sites ──────────────────────────────────────────────────────────
 def _load_aux() -> list[dict]:
     env_seeds = [
@@ -204,22 +386,28 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
     query_items = [r for r in web if r.get("engine") != "auxiliary_site"]
     aux_only = [r for r in web if r.get("engine") == "auxiliary_site"]
 
+    # Per-source budgets, tuned for the typical 8K-token model context.
+    # 9 web × 2800 + 10 X × 500 + 3 aux × 700 ≈ 32K chars (~8K tokens) of
+    # raw content; ``_focused_excerpt`` skips nav/marketing copy so the kept
+    # text is high-density. Bumped from the prior head-truncation defaults
+    # (1500/400/300 × 6/6/3) which dropped mid-page price/datum tables off
+    # the cliff.
     lines = [f"── LIVE SEARCH RESULTS for: {query} (retrieved {retrieved_at}) ──"]
     if query_items:
         lines.append("[ WEB SEARCH RESULTS ]")
-        for i, r in enumerate(query_items[:6], 1):
-            preview = r.get("text", "")[:1500]
-            tail = "…" if len(r.get("text", "")) > 1500 else ""
-            lines.append(f"[W{i}] {r['title']}\nURL: {r['url']}\n{preview}{tail}")
+        for i, r in enumerate(query_items[:9], 1):
+            preview = _focused_excerpt(r.get("text", ""), query, 2800)
+            lines.append(f"[W{i}] {r['title']}\nURL: {r['url']}\n{preview}")
     if x_items:
         lines.append("[ X / TWITTER — LATEST POSTS ]")
-        for i, r in enumerate(x_items[:6], 1):
-            preview = r.get("text", r.get("snippet", ""))[:400]
+        for i, r in enumerate(x_items[:10], 1):
+            preview = _focused_excerpt(r.get("text", r.get("snippet", "")) or "",
+                                       query, 500)
             lines.append(f"[X{i}] {r['title']}\nURL: {r['url']}\n{preview}")
     if aux_only:
         lines.append("[ AUXILIARY SITES ]")
         for i, r in enumerate(aux_only[:3], 1):
-            preview = r.get("text", "")[:300]
+            preview = _focused_excerpt(r.get("text", ""), query, 700)
             lines.append(f"[A{i}] {r['title']}\nURL: {r['url']}\n{preview}")
     lines.append("── END SEARCH RESULTS ──")
     context_text = "\n\n".join(lines)

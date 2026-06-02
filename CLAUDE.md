@@ -3,21 +3,23 @@ Codex will review your output once you are done
 
 Local AI stack running on an RTX 3060 (12 GB VRAM). Provides a fully offline LLM inference pipeline with RAG, web search, persistent memory, and an OpenAI-compatible API.
 
-## Services (3 containers)
+## Services (4 containers)
 
 | Service | Container | Port | Purpose |
 |---------|-----------|------|---------|
 | Ollama | `ollama` | 11434 | GPU inference engine (CUDA) |
 | SearXNG | `searxng` | 8025 | Private self-hosted web search |
+| Postgres+pgvector | `llm-db` | 5433 | RAG metadata + vector store |
 | API + UI | `llm-api` | 8030 | FastAPI REST + RAG + brand-new SPA at `/` |
 
-The API now embeds ChromaDB (no separate container) and pulls models on startup
-(no separate bootstrap container). Open WebUI was removed — the SPA is the only UI.
+The API uses Postgres+pgvector (HNSW cosine index) for the RAG store and
+pulls models on startup. Open WebUI was removed — the SPA is the only UI.
 
 ## Key Notes
 
 - **Open in browser**: `http://localhost:8030`
-- **Primary model**: `mistral:7b-instruct-q4_K_M` (~6.5 GB VRAM, ~35–50 tok/s) — pulled automatically on first start
+- **Primary model**: `huihui_ai/qwen2.5-abliterate:14b` (~9 GB VRAM at Q4_K_M) — pulled automatically on first start
+- **Model alias contract**: downstream apps should request `model: "default"` — `normalize_model()` resolves it to the active model server-side, so swaps via `/v1/settings` or `DEFAULT_MODEL` env need no client edits
 - **Embed model**: `nomic-embed-text` — pulled automatically when `MEMORY_ENABLED=true`
 - **API auth**: Bearer token via `API_KEY`; the SPA prompts for it on first visit and stores in localStorage
 - **Persistence**: a single named volume `app_data` holds chroma, conversations, finetune, and settings under `/app/data`
@@ -60,7 +62,8 @@ llm-app/
 |--------|-------|---------|
 | `ollama_models` | `/root/.ollama` | Downloaded model weights |
 | `searxng_data` | `/etc/searxng` | SearXNG runtime state |
-| `app_data` | `/app/data` | chroma/, conversations/, finetune/, settings.json |
+| `db_data` | `/var/lib/postgresql/data` | Postgres data (RAG vectors + metadata) |
+| `app_data` | `/app/data` | conversations/, finetune/, settings.json |
 
 ## Common Operations
 
@@ -75,16 +78,23 @@ docker compose down
 docker compose restart api
 
 # Manually pull a different model
-docker exec ollama ollama pull llama3:8b-instruct-q4_K_M
+docker exec ollama ollama pull <model-tag>
+
+# Swap the active model server-side (no client edits needed — all
+# downstream apps pass model:"default" and re-resolve on every call)
+curl -X PATCH http://localhost:8030/v1/settings \
+  -H "Authorization: Bearer change-me-in-production" \
+  -H "Content-Type: application/json" \
+  -d '{"default_model":"<new-model-tag>"}'
 
 # API health check
 curl http://localhost:8030/health
 
-# Chat via API (OpenAI-compatible)
+# Chat via API (OpenAI-compatible) — use the alias
 curl http://localhost:8030/v1/chat/completions \
   -H "Authorization: Bearer change-me-in-production" \
   -H "Content-Type: application/json" \
-  -d '{"model":"mistral:7b-instruct-q4_K_M","messages":[{"role":"user","content":"Hello"}]}'
+  -d '{"model":"default","messages":[{"role":"user","content":"Hello"}]}'
 
 # GPU usage
 nvidia-smi
@@ -111,7 +121,8 @@ All require `Authorization: Bearer <API_KEY>` except `/health`, `/metrics`, `/`,
 - `POST /v1/search` — Explicit web search + optional answer
 - `GET/POST/DELETE /v1/search/auxiliary-sites` — Manage sites always fetched alongside searches
 - `GET  /v1/search/x/status` · `POST /v1/search/x` — X/Twitter search
-- `GET  /v1/memory/stats` · `GET /v1/memory/search` · `DELETE /v1/memory/source/{id}` · `POST /v1/memory/ingest`
+- `GET  /v1/memory/stats` · `GET /v1/memory/search` · `DELETE /v1/memory/source/{id}` · `POST /v1/memory/ingest` · `POST /v1/memory/wipe`
+- `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
 
@@ -120,10 +131,23 @@ All require `Authorization: Bearer <API_KEY>` except `/health`, `/metrics`, `/`,
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Inference backend |
-| `DEFAULT_MODEL` | `mistral:7b-instruct-q4_K_M` | Default chat model |
+| `DEFAULT_MODEL` | `huihui_ai/qwen2.5-abliterate:14b` | Active model; resolves the `"default"` alias requests |
 | `EMBED_MODEL` | `nomic-embed-text` | Vector embeddings |
 | `API_KEY` | `change-me-in-production` | Bearer auth token |
-| `MEMORY_ENABLED` | `true` | Enable embedded ChromaDB RAG |
+| `MEMORY_ENABLED` | `true` | Enable Postgres+pgvector RAG |
+| `DATABASE_URL` | `postgresql://llm:llm@db:5432/llmrag` | Postgres connection string |
+| `EMBED_DIM` | `768` | Embedding dimensionality (match the embed model) |
+| `REFINE_WINDOW_START` | `23:00` | Refine overnight-window start (HH:MM in `REFINE_TIMEZONE`). Empty either bound to fall back to `REFINE_AT` daily mode. |
+| `REFINE_WINDOW_END` | `06:00` | Refine overnight-window end (wraps past midnight when end ≤ start) |
+| `REFINE_BATCH_PAUSE_S` | `30` | Seconds the refine loop pauses between back-to-back batches inside the window (yields embedding capacity to live traffic) |
+| `REFINE_AT` | `02:00` | Daily wall-clock time for refine when window mode is disabled (HH:MM, empty disables) |
+| `REFINE_TIMEZONE` | `America/Chicago` | IANA TZ used by the refine schedule (DST-aware) |
+| `REFINE_PER_RUN` | `30` | Sources processed per refine batch |
+| `DISTILL_WINDOW_START` | `23:00` | Distill overnight-window start (HH:MM); same fall-back rules as refine |
+| `DISTILL_WINDOW_END` | `06:00` | Distill overnight-window end |
+| `DISTILL_BATCH_PAUSE_S` | `30` | Seconds the distill loop pauses between batches inside the window |
+| `DISTILL_AT` | `03:00` | Daily wall-clock time for distill when window mode is disabled |
+| `DISTILL_TIMEZONE` | `America/Chicago` | IANA TZ used by the distill schedule |
 | `SEARCH_ENABLED` | `true` | Enable SearXNG web search |
 | `SEARCH_ALWAYS` | `false` | Force search on every query (vs. auto-decision) |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli |

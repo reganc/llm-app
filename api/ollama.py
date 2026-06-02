@@ -10,25 +10,34 @@ from typing import AsyncIterator
 
 import httpx
 
-from config import CFG
+from config import CFG, get_active_model
 
 log = logging.getLogger("llm-api.ollama")
 
 _THINKING_MODEL_RE = re.compile(r"qwen3|deepseek-r1|phi4.*reason|qwopus", re.IGNORECASE)
 
+_DEFAULT_ALIASES = {"", "default", "auto"}
 
-def normalize_model(model: str) -> str:
-    """Strip UI suffixes that can leak into requests."""
-    return model.removesuffix(" [Search+Memory]")
+
+def normalize_model(model: str | None) -> str:
+    """Resolve aliases ("default"/"auto"/empty → active model) and strip UI suffixes.
+
+    Downstream apps should pass ``model="default"`` so a server-side swap via
+    ``/v1/settings`` or ``DEFAULT_MODEL`` env propagates without per-app edits.
+    """
+    cleaned = (model or "").removesuffix(" [Search+Memory]").strip()
+    if cleaned.lower() in _DEFAULT_ALIASES:
+        return get_active_model()
+    return cleaned
 
 
 def is_thinking_model(model: str) -> bool:
-    return bool(_THINKING_MODEL_RE.search(model))
+    return bool(_THINKING_MODEL_RE.search(normalize_model(model)))
 
 
 def maybe_no_think(messages: list[dict], model: str) -> list[dict]:
     """qwen3/deepseek-r1/qwopus: prepend /no_think to skip the thinking phase."""
-    if not is_thinking_model(model):
+    if not is_thinking_model(normalize_model(model)):
         return messages
     out = list(messages)
     for i in range(len(out) - 1, -1, -1):
@@ -178,6 +187,29 @@ async def pull(model: str, *, timeout: float = 1800.0) -> bool:
             return r.status_code == 200
     except Exception as e:
         log.warning("model pull failed for %s: %s", model, e)
+        return False
+
+
+async def copy_model(source: str, destination: str) -> bool:
+    """Create/refresh an Ollama-side alias tag pointing at ``source``.
+
+    Used to publish a stable ``default`` tag in Ollama so direct Ollama clients
+    (apps that bypass llm-app) can also request ``model="default"``. If the
+    destination already exists, Ollama replaces its manifest with ``source``'s.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(
+                f"{CFG.ollama_url}/api/copy",
+                json={"source": source, "destination": destination},
+            )
+            ok = r.status_code == 200
+            if not ok:
+                log.warning("ollama copy %s→%s failed: %s %s",
+                            source, destination, r.status_code, r.text[:200])
+            return ok
+    except Exception as e:
+        log.warning("ollama copy %s→%s failed: %s", source, destination, e)
         return False
 
 

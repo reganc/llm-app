@@ -1,12 +1,20 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 httpx==0.27.2
-pydantic==2.9.2
+pydantic==2.10.6
 python-multipart==0.0.9
+# Per-IP rate limiting (defense-in-depth once the API is internet-exposed)
+slowapi==0.1.9
 # Content extraction
 trafilatura==1.12.2
 pypdf==4.3.1
 python-docx==1.1.2
 youtube-transcript-api==0.6.2
-# Long-term memory / RAG (embedded persistent client)
-chromadb==0.5.23
+# Long-term memory / RAG — Postgres + pgvector
+psycopg[binary]==3.2.3
+psycopg-pool==3.2.4
+pgvector==0.3.6
+# Fallback timezone DB for zoneinfo (cron-style schedulers use America/Chicago)
+tzdata>=2024.1
+# Site crawling — JS-aware via embedded Playwright/Chromium
+crawl4ai==0.8.6

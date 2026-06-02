@@ -92,12 +92,20 @@
                 <span>Fetches the article, saves to memory, opens chat</span>
               </div>
             </button>
+            <button type="button" class="quick-action" data-action="crawl-site">
+              <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M2 8h12M8 2c2.5 3 2.5 9 0 12M8 2c-2.5 3-2.5 9 0 12" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+              <div>
+                <strong>Crawl an entire site</strong>
+                <span>Recursively follow links, ingest every page into memory</span>
+              </div>
+            </button>
           </div>
           <div class="suggest">
             <button class="suggest-btn" data-q="What's new in Mistral 7B's instruction following?">What's new in Mistral 7B's instruction following?</button>
             <button class="suggest-btn" data-q="/search latest GPU prices RTX 3060 Ti">/search latest GPU prices RTX 3060 Ti</button>
             <button class="suggest-btn" data-q="/x current sentiment about AI regulation">/x current sentiment about AI regulation</button>
             <button class="suggest-btn" data-q="What's in my memory? List the most recent sources.">What's in my memory? List the most recent sources.</button>
+            <button class="suggest-btn" data-q="/library What does my library say about ">/library What does my library say about …</button>
           </div>
         </div>
       </section>
@@ -119,6 +127,10 @@
           <button type="button" id="addUrlBtn" class="action-chip" title="Read a webpage and save it to memory">
             <svg viewBox="0 0 16 16" width="13" height="13"><path d="M6.5 8.5l3-3M5.5 10.5L4 12a2.5 2.5 0 11-3.5-3.5L2 7M10.5 5.5L12 4a2.5 2.5 0 113.5 3.5L14 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
             <span>Add URL</span>
+          </button>
+          <button type="button" id="crawlSiteBtn" class="action-chip" title="Crawl every page on a site into memory">
+            <svg viewBox="0 0 16 16" width="13" height="13"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M2 8h12M8 2c2.5 3 2.5 9 0 12M8 2c-2.5 3-2.5 9 0 12" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+            <span>Crawl site</span>
           </button>
           <span class="composer-hint-inline">Drop a file anywhere to ingest</span>
         </div>
@@ -245,6 +257,10 @@
           <svg viewBox="0 0 16 16" width="13" height="13"><path d="M6.5 8.5l3-3M5.5 10.5L4 12a2.5 2.5 0 11-3.5-3.5L2 7M10.5 5.5L12 4a2.5 2.5 0 113.5 3.5L14 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
           <span>Add URL</span>
         </button>
+        <button type="button" id="libraryCrawlSiteBtn" class="ghost-btn" title="Crawl an entire site and save every page to memory">
+          <svg viewBox="0 0 16 16" width="13" height="13"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M2 8h12M8 2c2.5 3 2.5 9 0 12M8 2c-2.5 3-2.5 9 0 12" stroke="currentColor" stroke-width="1.2" fill="none"/></svg>
+          <span>Crawl site</span>
+        </button>
         <button type="button" id="libraryAddFileBtn" class="ghost-btn" title="Upload a document into memory">
           <svg viewBox="0 0 16 16" width="13" height="13"><path d="M9.6 4.4l-5.2 5.2a2.4 2.4 0 003.4 3.4l5.6-5.6a4 4 0 00-5.7-5.7L2 7.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
           <span>Upload</span>
@@ -298,6 +314,40 @@
       <footer class="modal-foot">
         <button type="button" class="ghost-btn" data-close="urlIngestModal">Cancel</button>
         <button type="submit" class="primary-btn">Read &amp; save</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Modal: Crawl site -->
+  <dialog id="siteIngestModal" class="modal">
+    <form id="siteIngestForm">
+      <header class="modal-head">
+        <h3>Crawl an entire site</h3>
+        <button type="button" class="icon-btn" data-close="siteIngestModal" formnovalidate>×</button>
+      </header>
+      <div class="modal-body">
+        <p class="muted">Recursively follows same-origin links from the seed URL. Each page is extracted, chunked, and embedded into memory. Use Firecrawl when configured (<code>FIRECRAWL_URL</code>); otherwise falls back to a local breadth-first crawler.</p>
+        <div class="field">
+          <label>Seed URL</label>
+          <input type="url" id="siteIngestUrl" placeholder="https://example.com/docs" required autocomplete="off" />
+        </div>
+        <div class="field row">
+          <label>Max pages</label>
+          <input type="number" id="siteIngestPages" value="25" min="1" max="500" />
+        </div>
+        <div class="field row">
+          <label>Max depth</label>
+          <input type="number" id="siteIngestDepth" value="2" min="0" max="6" />
+        </div>
+        <div class="field row">
+          <label title="Bypass Firecrawl and use the built-in crawler">Force local crawler</label>
+          <input type="checkbox" id="siteIngestLocal" />
+        </div>
+        <div id="siteIngestProgress" class="muted-small" hidden></div>
+      </div>
+      <footer class="modal-foot">
+        <button type="button" class="ghost-btn" data-close="siteIngestModal">Cancel</button>
+        <button type="submit" class="primary-btn" id="siteIngestSubmit">Start crawl</button>
       </footer>
     </form>
   </dialog>

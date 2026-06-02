@@ -12,14 +12,13 @@ log = logging.getLogger("llm-api")
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data"))
-CHROMA_DIR = DATA_DIR / "chroma"
 CONV_DIR = DATA_DIR / "conversations"
 FINETUNE_DIR = DATA_DIR / "finetune"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 AUX_SITES_FILE = DATA_DIR / "auxiliary_sites.json"
 STATIC_DIR = Path(__file__).parent / "static"
 
-for d in (DATA_DIR, CHROMA_DIR, CONV_DIR, FINETUNE_DIR):
+for d in (DATA_DIR, CONV_DIR, FINETUNE_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 
@@ -31,11 +30,17 @@ class Config:
     api_key: str
     max_tokens: int
     cors_origins: list[str]
+    rate_limit_enabled: bool
+    rate_limit_default: str
 
     memory_enabled: bool
     chunk_size: int
     chunk_overlap: int
     memory_top_k: int
+    database_url: str
+    embed_dim: int
+    db_pool_min: int
+    db_pool_max: int
 
     search_enabled: bool
     search_always: bool
@@ -63,15 +68,21 @@ def _csv(name: str, default: str) -> list[str]:
 
 CFG = Config(
     ollama_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/"),
-    default_model=os.getenv("DEFAULT_MODEL", "mistral:7b-instruct-q4_K_M"),
+    default_model=os.getenv("DEFAULT_MODEL", "huihui_ai/qwen2.5-abliterate:14b"),
     embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
     api_key=os.getenv("API_KEY", "change-me-in-production"),
     max_tokens=int(os.getenv("MAX_TOKENS", "4096")),
     cors_origins=_csv("CORS_ORIGINS", "*"),
+    rate_limit_enabled=os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true",
+    rate_limit_default=os.getenv("RATE_LIMIT", "120/minute"),
     memory_enabled=os.getenv("MEMORY_ENABLED", "true").lower() == "true",
     chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
     chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
     memory_top_k=int(os.getenv("MEMORY_TOP_K", "5")),
+    database_url=os.getenv("DATABASE_URL", "postgresql://llm:llm@db:5432/llmrag"),
+    embed_dim=int(os.getenv("EMBED_DIM", "768")),
+    db_pool_min=int(os.getenv("DB_POOL_MIN", "1")),
+    db_pool_max=int(os.getenv("DB_POOL_MAX", "8")),
     search_enabled=os.getenv("SEARCH_ENABLED", "true").lower() == "true",
     search_always=os.getenv("SEARCH_ALWAYS", "false").lower() == "true",
     searxng_url=os.getenv("SEARXNG_URL", "http://searxng:8080").rstrip("/"),

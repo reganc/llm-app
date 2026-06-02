@@ -2,7 +2,6 @@
 knowledge entries that participate in future RAG retrieval."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -15,6 +14,7 @@ from pydantic import BaseModel, Field
 
 import memory as mem
 import ollama as oll
+import scheduler as sched
 from auth import verify_api_key
 from config import CFG, DATA_DIR, get_active_model
 
@@ -24,11 +24,19 @@ router = APIRouter(prefix="/v1", tags=["distill"], dependencies=[Depends(verify_
 
 STATE_FILE: Path = DATA_DIR / "distill_state.json"
 
-# Default to mistral 7b for speed; falls back to active model if mistral isn't pulled
-DISTILL_MODEL = os.getenv("DISTILL_MODEL", "mistral:7b-instruct-q4_K_M")
-DISTILL_INTERVAL_HOURS = float(os.getenv("DISTILL_INTERVAL_HOURS", "24"))
+# "default" resolves to the active model server-side; override with a concrete
+# tag (e.g. a smaller/faster model) when distill should diverge from chat.
+DISTILL_MODEL = os.getenv("DISTILL_MODEL", "default")
+DISTILL_AT = os.getenv("DISTILL_AT", "03:00")  # HH:MM, empty disables daily mode
+DISTILL_TIMEZONE = os.getenv("DISTILL_TIMEZONE", "America/Chicago")
 DISTILL_PER_RUN = int(os.getenv("DISTILL_PER_RUN", "20"))
 DISTILL_MIN_ANSWER_CHARS = 120  # skip trivially short answers
+
+# Overnight window mode: matches refine — runs back-to-back batches inside
+# [start, end] each night until pending == 0, then idles until next window.
+DISTILL_WINDOW_START = os.getenv("DISTILL_WINDOW_START", "23:00")
+DISTILL_WINDOW_END = os.getenv("DISTILL_WINDOW_END", "06:00")
+DISTILL_BATCH_PAUSE_S = float(os.getenv("DISTILL_BATCH_PAUSE_S", "30"))
 
 _QA_RE = re.compile(r"User:\s*(?P<u>.*?)\nAssistant:\s*(?P<a>.*)", re.DOTALL)
 _TITLE_RE = re.compile(r"^TITLE:\s*(.+?)$", re.IGNORECASE | re.MULTILINE)
@@ -100,7 +108,7 @@ async def run(*, model: str | None = None, limit: int | None = None) -> dict:
     use_model = model or DISTILL_MODEL or get_active_model()
     use_limit = limit if limit is not None else DISTILL_PER_RUN
 
-    pending = mem.pending_distill_chunks(limit=use_limit)
+    pending = await mem.pending_distill_chunks(limit=use_limit)
     if not pending:
         state = _load_state()
         state["last_run_at"] = datetime.now(timezone.utc).isoformat()
@@ -154,7 +162,7 @@ async def run(*, model: str | None = None, limit: int | None = None) -> dict:
             last_error = str(e)
 
     if chunks_to_mark:
-        mem.mark_distilled(chunks_to_mark)
+        await mem.mark_distilled(chunks_to_mark)
 
     state = _load_state()
     state["last_run_at"] = datetime.now(timezone.utc).isoformat()
@@ -168,41 +176,73 @@ async def run(*, model: str | None = None, limit: int | None = None) -> dict:
         "model": use_model,
         "distilled": distilled_count,
         "skipped": skipped,
-        "pending_remaining": mem.pending_distill_count(),
+        "pending_remaining": await mem.pending_distill_count(),
         "last_error": last_error,
     }
 
 
-def status() -> dict:
+async def status() -> dict:
     state = _load_state()
+    now_utc = datetime.now(timezone.utc)
+    window = sched.window_bounds(now_utc, DISTILL_WINDOW_START,
+                                 DISTILL_WINDOW_END, DISTILL_TIMEZONE)
+    if window is not None:
+        ws, we = window
+        schedule = {
+            "mode": "window",
+            "window_start": DISTILL_WINDOW_START,
+            "window_end": DISTILL_WINDOW_END,
+            "timezone": DISTILL_TIMEZONE,
+            "batch_pause_s": DISTILL_BATCH_PAUSE_S,
+            "next_window_start_utc": ws.isoformat(timespec="minutes"),
+            "next_window_end_utc": we.isoformat(timespec="minutes"),
+            "in_window": ws <= now_utc < we,
+        }
+    else:
+        next_run = sched.next_at(now_utc, DISTILL_AT, DISTILL_TIMEZONE)
+        schedule = {
+            "mode": "daily",
+            "at": DISTILL_AT or None,
+            "timezone": DISTILL_TIMEZONE,
+            "next_run_utc": next_run.isoformat(timespec="minutes") if next_run else None,
+        }
     return {
         **state,
-        "pending": mem.pending_distill_count(),
-        "interval_hours": DISTILL_INTERVAL_HOURS,
+        "pending": await mem.pending_distill_count(),
+        "schedule": schedule,
         "model": DISTILL_MODEL,
         "per_run": DISTILL_PER_RUN,
     }
 
 
 # ── Background scheduler ─────────────────────────────────────────────────────
+def _is_done(result: dict) -> bool:
+    """Window-mode "backlog drained" predicate. True when nothing was
+    distilled and nothing remains pending."""
+    if not result.get("ran"):
+        return True
+    return (result.get("pending_remaining", 0) == 0
+            and result.get("distilled", 0) == 0)
+
+
 async def scheduler_loop() -> None:
-    if DISTILL_INTERVAL_HOURS <= 0:
-        log.info("distill scheduler disabled (DISTILL_INTERVAL_HOURS=0)")
+    if sched.parse_hhmm(DISTILL_WINDOW_START) and sched.parse_hhmm(DISTILL_WINDOW_END):
+        await sched.window_loop(
+            name="distill",
+            start_hhmm=DISTILL_WINDOW_START,
+            end_hhmm=DISTILL_WINDOW_END,
+            tz_name=DISTILL_TIMEZONE,
+            run=run,
+            is_done=_is_done,
+            batch_pause_s=DISTILL_BATCH_PAUSE_S,
+        )
         return
-    interval = DISTILL_INTERVAL_HOURS * 3600
-    log.info("distill scheduler running every %.1fh", DISTILL_INTERVAL_HOURS)
-    # Wait one interval before the first auto-run so startup isn't blocked
-    while True:
-        try:
-            await asyncio.sleep(interval)
-            log.info("distill scheduler: starting auto-run")
-            result = await run()
-            log.info("distill scheduler: %s", result)
-        except asyncio.CancelledError:
-            log.info("distill scheduler stopping")
-            raise
-        except Exception as e:
-            log.exception("distill scheduler iteration failed: %s", e)
+    await sched.daily_loop(
+        name="distill",
+        hhmm=DISTILL_AT,
+        tz_name=DISTILL_TIMEZONE,
+        run=run,
+    )
 
 
 # ── HTTP routes ──────────────────────────────────────────────────────────────
@@ -218,4 +258,4 @@ async def distill_run(req: DistillRunRequest = DistillRunRequest()):
 
 @router.get("/distill/status")
 async def distill_status():
-    return status()
+    return await status()

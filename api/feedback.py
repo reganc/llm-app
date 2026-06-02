@@ -30,7 +30,7 @@ class FeedbackClearRequest(BaseModel):
 
 @router.post("/feedback")
 async def submit_feedback(req: FeedbackRequest):
-    chunks_updated = mem.update_feedback(req.message_id, req.rating)
+    chunks_updated = await mem.update_feedback(req.message_id, req.rating)
     conv_updated = False
     if req.conversation_id:
         conv_updated = conv_store.set_feedback(
@@ -49,7 +49,7 @@ async def submit_feedback(req: FeedbackRequest):
 
 @router.delete("/feedback")
 async def clear_feedback(req: FeedbackClearRequest):
-    chunks_updated = mem.update_feedback(req.message_id, None)
+    chunks_updated = await mem.update_feedback(req.message_id, None)
     conv_updated = False
     if req.conversation_id:
         conv_updated = conv_store.set_feedback(
@@ -65,4 +65,4 @@ async def clear_feedback(req: FeedbackClearRequest):
 
 @router.get("/feedback/stats")
 async def feedback_stats():
-    return mem.feedback_stats()
+    return await mem.feedback_stats()

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 import conversations as conv_store
+import crawler
 import memory as mem
 import ollama as oll
 from auth import verify_api_key
@@ -140,6 +141,43 @@ async def ingest_url_to_conversation(req: UrlConvRequest):
         ))
     return {"conversation_id": conv["id"], "name": name,
             "source": conv.get("source")}
+
+
+class SiteIngestRequest(BaseModel):
+    url: str
+    max_pages: int = Field(default=25, ge=1, le=500)
+    max_depth: int = Field(default=2, ge=0, le=6)
+    force_local: bool = False
+    # When true, URLs already ingested under this seed are skipped so
+    # consecutive runs walk past the per-job page cap on large sites.
+    resume: bool = True
+
+
+@router.post("/site")
+async def ingest_site_route(req: SiteIngestRequest):
+    if not CFG.memory_enabled:
+        raise HTTPException(409, "MEMORY_ENABLED=false; cannot ingest a site")
+    job = await crawler.start_crawl(
+        seed_url=req.url,
+        max_pages=req.max_pages,
+        max_depth=req.max_depth,
+        force_local=req.force_local,
+        resume=req.resume,
+    )
+    return job.to_status()
+
+
+@router.get("/site/{job_id}")
+async def ingest_site_status(job_id: str):
+    status = await crawler.get_job(job_id)
+    if not status:
+        raise HTTPException(404, f"unknown crawl job: {job_id}")
+    return status
+
+
+@router.get("/site")
+async def ingest_site_list(limit: int = 20):
+    return {"jobs": await crawler.list_jobs(limit=limit)}
 
 
 @router.post("/document")
