@@ -78,9 +78,9 @@ async def chat(payload: dict, *, timeout: float = 180.0) -> dict:
 async def generate(prompt: str, *, model: str | None = None, system: str | None = None,
                    temperature: float = 0.7, max_tokens: int = 512,
                    num_ctx: int | None = None, thinking: bool = False) -> dict:
-    options: dict = {"temperature": temperature, "num_predict": max_tokens}
-    if num_ctx:
-        options["num_ctx"] = num_ctx
+    # Default to the shared num_ctx: a different value forces a model reload.
+    options: dict = {"temperature": temperature, "num_predict": max_tokens,
+                     "num_ctx": num_ctx or CFG.num_ctx}
     payload: dict = {
         "model": normalize_model(model or CFG.default_model),
         "prompt": prompt,

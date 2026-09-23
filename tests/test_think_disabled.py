@@ -125,3 +125,28 @@ def test_completions_reports_stop(monkeypatch):
     client = _client(monkeypatch, {"response": "done.", "done_reason": "stop"})
     r = client.post("/v1/completions", headers=AUTH, json={"prompt": "x"})
     assert r.json()["choices"][0]["finish_reason"] == "stop"
+
+
+# ── num_ctx must match the chat path ─────────────────────────────────────────
+# Ollama reloads the model (~7s on the 3060) whenever num_ctx changes between
+# requests. The router probes sent none (→ Ollama's 4096) while chat sends
+# CFG.num_ctx, so each request reloaded twice — and the reload blew the 4s
+# classifier timeout, whose fallback is "search the web".
+
+def test_classify_freshness_uses_shared_num_ctx(monkeypatch):
+    sent = _patch(monkeypatch, search,
+                  {"message": {"content": '{"needs_current": false}'}})
+    asyncio.run(search._classify_freshness("what is pi"))
+    assert sent[0]["options"]["num_ctx"] == search.CFG.num_ctx
+
+
+def test_probe_hedging_uses_shared_num_ctx(monkeypatch):
+    sent = _patch(monkeypatch, search, {"response": "fine"})
+    asyncio.run(search._probe_hedging("what is pi"))
+    assert sent[0]["options"]["num_ctx"] == search.CFG.num_ctx
+
+
+def test_generate_defaults_to_shared_num_ctx(monkeypatch):
+    sent = _patch(monkeypatch, oll, {"response": "hi", "done_reason": "stop"})
+    asyncio.run(oll.generate("hello"))
+    assert sent[0]["options"]["num_ctx"] == oll.CFG.num_ctx

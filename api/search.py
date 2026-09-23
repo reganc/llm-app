@@ -528,7 +528,9 @@ async def _classify_freshness(query: str) -> bool:
         # Thinking models spend the 60-token budget on reasoning and return ""
         # — which fell through to the True default and forced a web search.
         "think": False,
-        "options": {"temperature": 0, "num_predict": 60},
+        # Must match the chat path's num_ctx: Ollama reloads the model (~7s)
+        # whenever it changes, which blew the classifier timeout.
+        "options": {"temperature": 0, "num_predict": 60, "num_ctx": CFG.num_ctx},
     }
     try:
         async with httpx.AsyncClient(timeout=CFG.classifier_timeout) as client:
@@ -551,7 +553,9 @@ async def _probe_hedging(query: str) -> bool:
         # Without this the 50-token budget is all reasoning, the response is
         # empty, and the hedge regex can never match.
         "think": False,
-        "options": {"temperature": 0, "num_predict": 50},
+        # Must match the chat path's num_ctx: Ollama reloads the model (~7s)
+        # whenever it changes, which blew the classifier timeout.
+        "options": {"temperature": 0, "num_predict": 50, "num_ctx": CFG.num_ctx},
     }
     try:
         async with httpx.AsyncClient(timeout=CFG.classifier_timeout) as client:
