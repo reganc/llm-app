@@ -834,7 +834,8 @@ async def completions(req: CompletionRequest):
             "created": int(time.time()),
             "model": req.model,
             "choices": [{"text": data.get("response", ""), "index": 0,
-                         "finish_reason": "stop"}],
+                         "finish_reason": ("length" if data.get("done_reason") == "length"
+                                           else "stop")}],
             "usage": {
                 "prompt_tokens": data.get("prompt_eval_count", 0),
                 "completion_tokens": data.get("eval_count", 0),

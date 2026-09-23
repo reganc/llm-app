@@ -1,0 +1,4 @@
+# Test-only dependencies. Not installed into the runtime image — install with:
+#   pip install -r api/requirements-dev.txt   (then: pytest)
+-r requirements.txt
+pytest==8.3.3

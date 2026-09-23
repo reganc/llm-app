@@ -77,7 +77,7 @@ async def chat(payload: dict, *, timeout: float = 180.0) -> dict:
 
 async def generate(prompt: str, *, model: str | None = None, system: str | None = None,
                    temperature: float = 0.7, max_tokens: int = 512,
-                   num_ctx: int | None = None) -> dict:
+                   num_ctx: int | None = None, thinking: bool = False) -> dict:
     options: dict = {"temperature": temperature, "num_predict": max_tokens}
     if num_ctx:
         options["num_ctx"] = num_ctx
@@ -85,6 +85,9 @@ async def generate(prompt: str, *, model: str | None = None, system: str | None 
         "model": normalize_model(model or CFG.default_model),
         "prompt": prompt,
         "stream": False,
+        # Same default as build_payload: a thinking model otherwise spends the
+        # num_predict budget on reasoning and returns an empty response.
+        "think": thinking,
         "options": options,
     }
     if system:

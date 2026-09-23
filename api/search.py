@@ -525,6 +525,9 @@ async def _classify_freshness(query: str) -> bool:
         "model": oll.normalize_model(CFG.default_model),
         "messages": [{"role": "user", "content": _CLASSIFIER_PROMPT.format(query=query.strip())}],
         "stream": False,
+        # Thinking models spend the 60-token budget on reasoning and return ""
+        # — which fell through to the True default and forced a web search.
+        "think": False,
         "options": {"temperature": 0, "num_predict": 60},
     }
     try:
@@ -545,6 +548,9 @@ async def _probe_hedging(query: str) -> bool:
         "model": oll.normalize_model(CFG.default_model),
         "prompt": query.strip(),
         "stream": False,
+        # Without this the 50-token budget is all reasoning, the response is
+        # empty, and the hedge regex can never match.
+        "think": False,
         "options": {"temperature": 0, "num_predict": 50},
     }
     try:
