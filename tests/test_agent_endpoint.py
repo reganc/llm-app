@@ -126,7 +126,7 @@ def tool_call(name, query):
 
 # ── switching ────────────────────────────────────────────────────────────────
 
-def test_default_is_legacy_path(client, env):
+def test_agent_tools_false_uses_legacy_path(client, env):
     ask(client)
     assert env.router_calls == 1
     assert all("tools" not in p for p in env.chat_payloads)
@@ -326,3 +326,22 @@ def test_stream_repair_sends_replace_and_stores_fixed(client, env):
                                    "kind": "invalid", "invalid": ["W7"]}
     assert text.index("event: llm.replace") < text.index("data: [DONE]")
     assert env.stored[0]["assistant_msg"] == "gold [W1]"
+
+
+# ── default ──────────────────────────────────────────────────────────────────
+
+def test_agent_mode_is_on_by_default(tmp_path):
+    """AGENT_TOOLS unset → agent mode. Checked in a fresh interpreter so the
+    already-imported CFG (and the runner's own env) can't mask the default."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    env = {k: v for k, v in os.environ.items() if k != "AGENT_TOOLS"}
+    env["DATA_DIR"] = str(tmp_path)
+    api = Path(__file__).resolve().parent.parent / "api"
+    out = subprocess.run([sys.executable, "-c",
+                          "import config; print(config.CFG.agent_tools)"],
+                         cwd=api, env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "True"

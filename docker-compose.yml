@@ -119,6 +119,8 @@ services:
       - CHUNK_OVERLAP=150
       - MEMORY_TOP_K=5
       - MEMORY_MIN_SCORE=${MEMORY_MIN_SCORE:-0.70}
+      # Native tool-calling agent for /v1/chat/completions (false = legacy router)
+      - AGENT_TOOLS=${AGENT_TOOLS:-true}
       # Background schedulers
       #   Default mode is "window": run back-to-back batches inside the
       #   nightly [start, end] window until the backlog drains, then idle

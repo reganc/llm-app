@@ -142,7 +142,7 @@ class Seen:
 def seen(monkeypatch) -> Seen:
     s = Seen()
     cfg = dataclasses.replace(chat.CFG, api_key=API_KEY, memory_enabled=True,
-                              search_enabled=True)
+                              search_enabled=True, agent_tools=False)  # legacy path
     monkeypatch.setattr(chat, "CFG", cfg)
     monkeypatch.setattr("auth.CFG", cfg)
 

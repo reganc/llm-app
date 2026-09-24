@@ -152,8 +152,8 @@ A rewrite that introduces any name or number absent from the conversation
 is rejected (falls back to the original). Responses carry
 `retrieval_query` (SSE: `event: llm.retrieval_query`) when a rewrite was used.
 
-**Agent mode** (`api/agent.py`, opt-in): `"agent": true` on
-`/v1/chat/completions` (or `AGENT_TOOLS=true`) replaces the auto-search router
+**Agent mode** (`api/agent.py`, **on by default**): `/v1/chat/completions`
+uses it unless `AGENT_TOOLS=false` or the request sends `"agent": false`. It replaces the auto-search router
 and the `[SEARCH:]` sentinel with native Ollama tool calling. Tools are
 read-only: `web_search` and `library_search` (relevance-gated). At most 3
 rounds / 4 tool calls; the final round offers no tools so it always answers.
@@ -239,7 +239,7 @@ flag False and are unchanged.
 | `EMBED_MODEL` | `nomic-embed-text` | Vector embeddings |
 | `API_KEY` | `change-me-in-production` | Bearer auth token |
 | `MEMORY_ENABLED` | `true` | Enable Postgres+pgvector RAG |
-| `AGENT_TOOLS` | `false` | Default for the per-request `agent` flag (native tool-calling loop) |
+| `AGENT_TOOLS` | `true` | Default for the per-request `agent` flag (native tool-calling loop); `false` = legacy router |
 | `MEMORY_MIN_SCORE` | `0.70` | Auto-recall relevance floor (cosine); chunks must also share a query term. `0` disables. Library mode is exempt |
 | `DATABASE_URL` | `postgresql://llm:llm@db:5432/llmrag` | Postgres connection string |
 | `EMBED_DIM` | `768` | Embedding dimensionality (match the embed model) |

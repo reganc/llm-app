@@ -41,8 +41,11 @@ class Recorder:
 @pytest.fixture
 def rec(monkeypatch) -> Recorder:
     r = Recorder()
+    # These pin the legacy path; agent mode's store handling is covered in
+    # test_agent_endpoint.py.
     cfg = dataclasses.replace(chat.CFG, api_key=API_KEY, memory_enabled=True,
-                              search_enabled=True, x_search_enabled=True)
+                              search_enabled=True, x_search_enabled=True,
+                              agent_tools=False)
     monkeypatch.setattr(chat, "CFG", cfg)
     monkeypatch.setattr("auth.CFG", cfg)
 

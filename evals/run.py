@@ -108,10 +108,10 @@ def _observe_stream(client: httpx.Client, url: str, body: dict) -> dict:
 
 
 def run_case(client: httpx.Client, url: str, case: dict, mode: str,
-             temperature: float | None, use_agent: bool = False) -> dict:
+             temperature: float | None, use_agent: bool | None = None) -> dict:
     body = {"model": "default", "messages": _messages(case), "store": False}
-    if use_agent:
-        body["agent"] = True
+    if use_agent is not None:  # None = the server's AGENT_TOOLS default
+        body["agent"] = use_agent
     if temperature is not None:
         body["temperature"] = temperature
     started = time.monotonic()
@@ -190,8 +190,11 @@ def main() -> None:
     ap.add_argument("--url", default=os.getenv("LLM_BASE_URL", "http://localhost:8030/v1"))
     ap.add_argument("--mode", choices=["json", "stream"], default="json")
     ap.add_argument("--only", help="category name or case-id substring")
-    ap.add_argument("--agent", action="store_true",
-                    help="send agent:true (native tool-calling loop)")
+    path = ap.add_mutually_exclusive_group()
+    path.add_argument("--agent", dest="agent", action="store_const", const=True,
+                      help="force agent:true (native tool-calling loop)")
+    path.add_argument("--legacy", dest="agent", action="store_const", const=False,
+                      help="force agent:false (auto-search router + [SEARCH:])")
     ap.add_argument("--repeat", type=int, default=1,
                     help="runs per case; a case passes on a strict majority")
     ap.add_argument("--temperature", type=float, default=0.0,
@@ -216,7 +219,7 @@ def main() -> None:
     headers = {"Authorization": f"Bearer {_api_key()}"}
 
     temp = "server default" if args.temperature is None else args.temperature
-    agent_tag = " · agent" if args.agent else ""
+    agent_tag = {True: " · agent", False: " · legacy", None: " · server default"}[args.agent]
     print(f"{len(cases)} cases × {args.repeat} · {args.mode}{agent_tag} · "
           f"temperature {temp} · {url}\n")
     rows = _run_all(cases, args, url, headers)

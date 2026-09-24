@@ -112,8 +112,9 @@ CFG = Config(
     max_inject_chars=int(os.getenv("MAX_INJECT_CHARS", "5000")),
     num_ctx=int(os.getenv("NUM_CTX", "8192")),
     # Native tool-calling loop (agent.py) for /v1/chat/completions instead of
-    # the auto-search router + [SEARCH:] sentinel. Per-request `agent` wins.
-    agent_tools=os.getenv("AGENT_TOOLS", "false").lower() == "true",
+    # the auto-search router + [SEARCH:] sentinel. On by default; set false to
+    # fall back to the legacy path. Per-request `agent` wins either way.
+    agent_tools=os.getenv("AGENT_TOOLS", "true").lower() == "true",
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

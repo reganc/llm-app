@@ -9,7 +9,8 @@ python evals/run.py                                  # JSON mode (two-pass path)
 python evals/run.py --mode stream                    # SPA streaming path
 python evals/run.py --only followup                  # one category / id substring
 python evals/run.py --repeat 3                       # 3 runs/case, strict majority passes
-python evals/run.py --agent                          # native tool-calling loop (agent:true)
+python evals/run.py --legacy                         # legacy router path (agent:false)
+python evals/run.py --agent                          # force agent:true
 python evals/run.py --label tool-loop --compare evals/results/<baseline>.json
 ```
 
