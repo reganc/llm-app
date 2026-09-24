@@ -130,12 +130,56 @@ Coverage:
 |---|---|
 | `test_ollama_envelope.py` | `completion_envelope` — reasoning fallback, `finish_reason`, null/whitespace edges |
 | `test_ollama_stream.py` | `stream_chat` — `delta.reasoning`, end-of-stream flush, error surfacing |
+| `test_think_disabled.py` | `think:false` on the search-router probes + `ollama.generate`; `/v1/completions` reports `finish_reason:"length"` |
+| `test_query_rewrite.py` | follow-up rewrite gate, entity/number grounding guard, fallbacks; endpoints retrieve with the rewrite but answer the original |
+| `test_store_opt_out.py` | `store:false` skips turn storage + search ingest on chat/reasoning (JSON, SSE, commands, two-pass) |
+| `test_memory_relevance.py` | auto-recall relevance gate (`MEMORY_MIN_SCORE` + query-term overlap); library mode and title/URL matches exempt; 0 disables |
+| `test_agent.py` | tool loop core — round/call bounds, forced final answer, arg validation, duplicate suppression, tool-error containment, marker renumbering, streaming |
+| `test_agent_endpoint.py` | agent mode on `/v1/chat/completions` — opt-in/out, bypasses (response_format, raw, /commands, library mode), metadata, `store:false`, SSE event order |
+| `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
 
-All three are offline: Ollama, search and memory are stubbed, and the endpoint
+All are offline: Ollama, search and memory are stubbed, and the endpoint
 tests mount `chat.router` on a bare `FastAPI()` rather than importing `main`,
 avoiding its lifespan (postgres pool, warmup, schedulers) and rate-limit
 middleware. No services, database or network required.
+
+**Follow-up rewriting** (`api/rewrite.py`): on multi-turn requests whose last
+message looks like a follow-up (pronoun/reference or ≤4 words), one short
+`think:false` call rewrites it into a standalone query. Only retrieval, the
+search router and web search use it; the model answers the original words.
+A rewrite that introduces any name or number absent from the conversation
+is rejected (falls back to the original). Responses carry
+`retrieval_query` (SSE: `event: llm.retrieval_query`) when a rewrite was used.
+
+**Agent mode** (`api/agent.py`, opt-in): `"agent": true` on
+`/v1/chat/completions` (or `AGENT_TOOLS=true`) replaces the auto-search router
+and the `[SEARCH:]` sentinel with native Ollama tool calling. Tools are
+read-only: `web_search` and `library_search` (relevance-gated). At most 3
+rounds / 4 tool calls; the final round offers no tools so it always answers.
+Invalid, duplicate or failing calls return an error result to the model
+instead of raising. Citation markers are renumbered across calls
+(`web_search.markers` reports the totals). Memory is still pre-fetched, and the
+deterministic freshness regex ("today", "latest", "price of"…, plus present-tense
+role-holder questions like "who is the CEO of…" — `role:` signals) still runs one
+web search before the first model call — otherwise the model answers price
+questions from stale saved pages. Only the LLM router is dropped. Library
+mode, `response_format`, `raw` and `/commands` bypass the loop. SSE adds
+`event: llm.tool_call` (live) and `event: llm.agent`; JSON adds `agent`.
+**Citation repair**: the final answer is checked for markers the model was
+never shown (e.g. `[W8]` when only W1–W5 exist). One retry (no tools) gets the
+exact error; anything still invalid is stripped in code. If web results were
+shown but the answer cites none, one retry asks for citations; the rewrite is
+used only if it cites a real source (else the original stands). Reported as
+`agent.citation_repair`; in SSE the tokens have already gone out, so the fix
+arrives as `event: llm.replace` (the SPA swaps the message text) and the
+corrected text is what gets stored.
+No `fetch_url` tool yet — model-chosen URLs on an internet-exposed server need
+an SSRF allowlist first.
+
+**Evals** (`evals/`, see its README): 29 golden cases scored against the live
+stack — `python evals/run.py [--mode stream] [--compare <results.json>]`.
+Requests send `store:false` so evals never write memory.
 
 Note the layering: the endpoint tests stub `oll.stream_chat`, so they pin that
 the SSE wrapper *forwards* reasoning deltas and closes the stream correctly.
@@ -195,6 +239,8 @@ flag False and are unchanged.
 | `EMBED_MODEL` | `nomic-embed-text` | Vector embeddings |
 | `API_KEY` | `change-me-in-production` | Bearer auth token |
 | `MEMORY_ENABLED` | `true` | Enable Postgres+pgvector RAG |
+| `AGENT_TOOLS` | `false` | Default for the per-request `agent` flag (native tool-calling loop) |
+| `MEMORY_MIN_SCORE` | `0.70` | Auto-recall relevance floor (cosine); chunks must also share a query term. `0` disables. Library mode is exempt |
 | `DATABASE_URL` | `postgresql://llm:llm@db:5432/llmrag` | Postgres connection string |
 | `EMBED_DIM` | `768` | Embedding dimensionality (match the embed model) |
 | `REFINE_WINDOW_START` | `23:00` | Refine overnight-window start (HH:MM in `REFINE_TIMEZONE`). Empty either bound to fall back to `REFINE_AT` daily mode. |
