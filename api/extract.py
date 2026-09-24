@@ -78,7 +78,10 @@ async def _trafilatura(url: str) -> Optional[dict]:
                                      headers=_HEADERS) as client:
             r = await client.get(url)
             r.raise_for_status()
-            html = r.text
+            # Raw bytes, not r.text: with no charset in Content-Type, httpx
+            # decodes as UTF-8 and a page declaring windows-1252 in <meta>
+            # comes out as "Today\ufffdFor". trafilatura reads the meta tag.
+            html = r.content
         text = trafilatura.extract(html, include_comments=False,
                                    include_tables=True, no_fallback=False)
         if not text or len(text) < 100:

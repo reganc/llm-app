@@ -236,3 +236,15 @@ def test_store_knowledge_strips_nul_bytes(monkeypatch):
                                     source_type="pdf", identifier="t.pdf"))
     assert seen and all("\x00" not in c for c in seen)
     assert "alphabeta" in seen[0]
+
+
+def test_embeddings_are_floats_even_when_ollama_returns_ints(monkeypatch):
+    """psycopg refuses to dump a vector list mixing int and float
+    ("cannot dump lists of mixed types; got: float, int")."""
+    async def fake_embed(_text):
+        return [0.5, 0, -1, 0.25]          # JSON numbers: 0 and -1 decode as int
+
+    monkeypatch.setattr(mem.oll, "embed", fake_embed)
+    out = asyncio.run(mem._embed_one("x"))
+    assert out == [0.5, 0.0, -1.0, 0.25]
+    assert all(type(x) is float for x in out)

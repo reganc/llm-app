@@ -294,7 +294,10 @@ _EMBED_SEM = asyncio.Semaphore(4)
 
 async def _embed_one(text: str) -> list[float]:
     async with _EMBED_SEM:
-        return await oll.embed(text)
+        emb = await oll.embed(text)
+    # Ollama's JSON can carry exact integers (0, -1); psycopg refuses a vector
+    # list mixing int and float, which failed the whole document's insert.
+    return [float(x) for x in emb]
 
 
 # A full book is ~700 chunks; unbounded gather fired every embedding request
