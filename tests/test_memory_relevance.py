@@ -141,3 +141,18 @@ def test_min_score_zero_disables_the_gate():
     junk = [chunk(0.3, "unrelated"), chunk(0.55, "")]
     assert mem.filter_relevant(junk, "When was Herman Melville born?", min_score=0) == junk
 
+
+# ── user-saved vs incidental sources ─────────────────────────────────────────
+
+@pytest.mark.parametrize("stype", ["pdf", "txt", "docx", "md", "csv", "rtf", "web",
+                                   "firecrawl", "crawl4ai", "youtube_transcript",
+                                   "manual", "distilled"])
+def test_user_saved_types(stype):
+    assert mem.is_user_saved({"source_type": stype})
+
+
+@pytest.mark.parametrize("stype", ["bing", "duckduckgo", "duckduckgo_fallback", "google",
+                                   "searxng", "web_search", "auxiliary_site", "x_twitter",
+                                   "conversation", "", None])
+def test_incidental_types(stype):
+    assert not mem.is_user_saved({"source_type": stype})

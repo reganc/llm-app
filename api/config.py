@@ -63,6 +63,7 @@ class Config:
     context_char_limit: int
     max_inject_chars: int
     num_ctx: int
+    agent_tools: bool
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -110,6 +111,9 @@ CFG = Config(
     context_char_limit=int(os.getenv("CONTEXT_CHAR_LIMIT", "12000")),
     max_inject_chars=int(os.getenv("MAX_INJECT_CHARS", "5000")),
     num_ctx=int(os.getenv("NUM_CTX", "8192")),
+    # Native tool-calling loop (agent.py) for /v1/chat/completions instead of
+    # the auto-search router + [SEARCH:] sentinel. Per-request `agent` wins.
+    agent_tools=os.getenv("AGENT_TOOLS", "false").lower() == "true",
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

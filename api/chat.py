@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+import agent
 import conversations as conv_store
 import memory as mem
 import ollama as oll
@@ -22,6 +23,7 @@ from auth import verify_api_key
 from config import CFG, get_active_model
 from extract import truncate as truncate_text
 from prompts import SEARCH_ADDENDUM, build_system, get_system_prompt
+from prompts import search_block_prompt as _search_block_prompt
 
 log = logging.getLogger("llm-api.chat")
 
@@ -120,6 +122,9 @@ class ChatRequest(BaseModel):
     # turn and ingesting web-search pages. For evals and batch callers whose
     # turns would otherwise be recalled as "memory" by later requests.
     store: bool = True
+    # Native tool calling (agent.py): the model decides when to search. None
+    # falls back to AGENT_TOOLS. Ignored with response_format or a /command.
+    agent: bool | None = None
 
     model_config = {"extra": "ignore"}
 
@@ -377,29 +382,6 @@ def _library_block_prompt(memory_block: str, *, primary: bool) -> str:
         "conversation above.]\n"
     )
     return head + _trim(memory_block)
-
-
-def _search_block_prompt(search_block: str) -> str:
-    return (
-        "Live web search results, fetched moments ago. Use these as the authoritative "
-        "answer for any current/factual claim — they supersede your training data.\n\n"
-        "Rules:\n"
-        "1. Find and STATE the answer. Quote numbers verbatim ($4,715.06 stays as "
-        "$4,715.06). Cite every fact with the source's [W#] / [X#] / [A#] marker.\n"
-        "2. Prefer numbers paired with today's date, this week, or words like 'now', "
-        "'today', 'currently', 'spot', 'live', 'as of'. Treat them as the current value "
-        "and report them as such.\n"
-        "3. Numbers tied to old dates ('reached $X in 1980', 'record high in 2020') are "
-        "historical — do not present them as the current value, and do not extrapolate "
-        "or average a current price from them.\n"
-        "4. If every number you find is historical: state that plainly, give the most "
-        "recent dated figure with its date and citation, and stop. Do not guess a range.\n"
-        "5. Do not invent [L#] markers (those are memory, not search). Cite only the "
-        "[W#] / [X#] / [A#] markers that appear in the block below — not markers from "
-        "earlier turns in the conversation.\n"
-        "6. Do not echo these rules in your answer. Just answer.\n\n"
-        + search_block
-    )
 
 
 def _inject_context(messages: list[dict], *, search_block: str | None,
@@ -709,6 +691,143 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
         yield f"event: llm.web_search\ndata: {json.dumps(search_sum)}\n\n"
 
 
+# ── Agent (native tool calling) ──────────────────────────────────────────────
+def _with_tool_guidance(messages: list[dict]) -> list[dict]:
+    return [{**m, "content": m["content"] + agent.TOOL_GUIDANCE}
+            if m["role"] == "system" else m for m in messages]
+
+
+async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, *,
+                            use_search: bool, use_memory: bool):
+    """/v1/chat/completions via the tool-calling loop (see agent.py).
+
+    Memory is still pre-fetched (relevance-gated, with library-intent and
+    title lookups) so strong hits cost no round-trip; web search happens only
+    when the model calls it. Library mode keeps its strict no-web behavior.
+    """
+    _, chunks, _, intent_signals, command = await _resolve_context(
+        retrieval_query, None, req.stream, False,
+        use_search=False, use_memory=use_memory, store=req.store,
+    )
+    library_primary = command == "library"
+    if not library_primary:
+        # Search-ingested pages and past chat turns are snapshots: pre-fetched,
+        # they crowd out a fresh search ("v0.32.0, per your library"). Keep only
+        # what the user saved; the model can still reach the rest via
+        # library_search. Library mode (explicit) keeps everything.
+        chunks = [c for c in chunks if mem.is_user_saved(c)]
+    tools = [] if library_primary else agent.tools_for(web=use_search, library=use_memory)
+    trace = agent.Trace()
+    memory_block = None
+    if chunks:
+        mem_chars = _LIBRARY_MAX_CHARS if library_primary else 3000
+        memory_block = trace.renumber(
+            mem.build_context_block(chunks, max_chars=mem_chars, query=retrieval_query))
+    # Deterministic freshness phrasing ("today", "latest", "price of") still
+    # forces a search up front: the model will otherwise happily answer a
+    # price question from a stale saved page. Only the LLM router is dropped.
+    search_block = None
+    if use_search and not library_primary:
+        intent = search.detect_intent(retrieval_query)
+        if intent.get("force_search"):
+            intent_signals = intent.get("signals", []) or []
+            search_block = await agent.prefetch_web(retrieval_query, trace,
+                                                    store=req.store)
+    messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
+    if tools:
+        messages = _with_tool_guidance(messages)
+    best_score = max((c.get("score", 0) for c in chunks), default=0)
+    messages = _inject_context(messages, search_block=search_block,
+                               memory_block=memory_block,
+                               library_primary=library_primary,
+                               memory_first=best_score >= _MEMORY_TRUST_SCORE)
+    base = oll.build_payload(messages, req.model, temperature=req.temperature,
+                             max_tokens=req.max_tokens, top_p=req.top_p, stop=req.stop)
+    message_id = _new_message_id()
+
+    def remember(reply: str) -> None:
+        if req.store and use_memory and reply.strip():
+            asyncio.create_task(mem.store_conversation_turn(
+                conv_id=f"chat_{int(time.time())}",
+                conv_name=f"Chat ({req.system_prompt_key or 'default'})",
+                user_msg=clean, assistant_msg=reply, message_id=message_id,
+            ))
+
+    def summaries() -> dict:
+        out: dict = {"message_id": message_id,
+                     "agent": {"rounds": trace.rounds, "tool_calls": trace.calls}}
+        if trace.repair:
+            out["agent"]["citation_repair"] = trace.repair
+        if retrieval_query != clean:
+            out["retrieval_query"] = retrieval_query
+        if ws := trace.web_summary():
+            out["web_search"] = {**ws, "intent_signals": intent_signals}
+        if ms := _memory_summary(chunks + trace.library_chunks, command):
+            out["memory"] = ms
+            out["memory_used"] = ms["used"]
+        return out
+
+    if req.stream:
+        return StreamingResponse(
+            _agent_sse(messages, base, tools, trace, store=req.store,
+                       message_id=message_id, summaries=summaries, remember=remember),
+            media_type="text/event-stream")
+    try:
+        data, trace = await agent.run(messages, base, tools, store=req.store, trace=trace)
+    except Exception as e:
+        metrics["total_errors"] += 1
+        log.exception("agent completion failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    metrics["total_tokens_generated"] += data.get("eval_count", 0)
+    remember((data.get("message") or {}).get("content", "") or "")
+    return oll.completion_envelope(data, req.model, extra=summaries())
+
+
+def _event(name: str, payload: dict) -> str:
+    return f"event: {name}\ndata: {json.dumps(payload)}\n\n"
+
+
+async def _agent_sse(messages: list[dict], base: dict, tools: list[dict],
+                     trace: agent.Trace, *, store: bool, message_id: str,
+                     summaries, remember):
+    """SSE for the agent loop: tokens stream live, each tool call is announced
+    as `event: llm.tool_call`, and metadata events follow the answer."""
+    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+    model = base["model"]
+    buf: list[str] = []
+    yield _event("llm.message_id", {"id": message_id})
+    if rq := summaries().get("retrieval_query"):
+        yield _event("llm.retrieval_query", {"query": rq})
+    try:
+        async for ev in agent.stream(messages, base, tools, store=store,
+                                     trace=trace, on_token=buf.append):
+            if ev["type"] == "content":
+                yield oll._sse(chunk_id, model, delta=ev["text"], done=False)
+            elif ev["type"] == "tool_call":
+                yield _event("llm.tool_call", {"name": ev["name"], "query": ev["query"]})
+            elif ev["type"] == "replace":
+                # Tokens already went out; the client swaps in the corrected
+                # answer, and it is what gets remembered.
+                buf[:] = [ev["text"]]
+                yield _event("llm.replace", {"content": ev["text"],
+                                             "reason": "citation_repair",
+                                             "kind": ev["kind"],
+                                             "invalid": ev["invalid"]})
+    except Exception as e:
+        metrics["total_errors"] += 1
+        log.exception("agent stream failed")
+        yield oll._sse(chunk_id, model, delta=f"[Error: {e}]", done=False)
+    meta = summaries()
+    if "memory" in meta:
+        yield _event("llm.memory", meta["memory"])
+    if "web_search" in meta:
+        yield _event("llm.web_search", meta["web_search"])
+    yield _event("llm.agent", meta["agent"])
+    yield oll._sse(chunk_id, model, delta="", done=True)
+    yield "data: [DONE]\n\n"
+    remember("".join(buf))
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @router.post("/chat/completions")
 async def chat_completions(req: ChatRequest):
@@ -741,6 +860,14 @@ async def chat_completions(req: ChatRequest):
         [m.model_dump() for m in req.messages[:-1]], clean,
         enabled=use_search or use_memory,
     )
+    use_agent = (
+        (CFG.agent_tools if req.agent is None else req.agent)
+        and (use_search or use_memory) and inject_system
+        and not command and req.response_format is None
+    )
+    if use_agent:
+        return await _agent_completion(req, clean, retrieval_query,
+                                       use_search=use_search, use_memory=use_memory)
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         retrieval_query, command, req.stream, allow_two_pass,
         use_search=use_search, use_memory=use_memory, store=req.store,

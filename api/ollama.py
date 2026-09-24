@@ -140,6 +140,32 @@ async def stream_chat(payload: dict, on_token=None, *,
                     return
 
 
+async def stream_events(payload: dict, *, timeout: float = 180.0) -> AsyncIterator[dict]:
+    """Yield Ollama's raw streamed /api/chat objects (content and tool_calls).
+
+    Unlike `stream_chat`, which renders OpenAI SSE for the client, this is for
+    callers that must inspect each chunk — the tool-calling loop needs
+    `message.tool_calls`. Raises RuntimeError on an HTTP or in-stream error.
+    """
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", f"{CFG.ollama_url}/api/chat", json=payload) as r:
+            if r.status_code != 200:
+                body = (await r.aread()).decode(errors="replace")[:200]
+                raise RuntimeError(f"Ollama returned {r.status_code}: {body}")
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if "error" in obj:
+                    raise RuntimeError(f"Ollama error: {obj['error']}")
+                yield obj
+                if obj.get("done"):
+                    return
+
+
 def _delta(content: str, reasoning: str = "") -> dict:
     d: dict = {"content": content}
     if reasoning:

@@ -656,6 +656,22 @@ def _normalize_url(url: str) -> str:
     return _URL_NORM_RE.sub("", url.strip()).rstrip("/").lower()
 
 
+# Source types the user put in the library deliberately: uploads, URL ingests,
+# crawls, manual notes, and knowledge distilled from rated conversations.
+# Everything else is incidental — pages ingested as a side effect of web search
+# (stored under the engine's name: bing, duckduckgo, …), X posts, auxiliary
+# sites, and raw conversation turns.
+USER_SAVED_SOURCE_TYPES = frozenset({
+    "pdf", "txt", "docx", "md", "csv", "rtf",
+    "web", "firecrawl", "crawl4ai", "youtube_transcript",
+    "manual", "distilled",
+})
+
+
+def is_user_saved(chunk: dict) -> bool:
+    return (chunk.get("source_type") or "") in USER_SAVED_SOURCE_TYPES
+
+
 def filter_relevant(chunks: list[dict], query: str, *,
                     min_score: float) -> list[dict]:
     """Keep chunks that are plausibly about `query` (auto-recall gate).

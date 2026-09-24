@@ -106,3 +106,28 @@ def build_system(key: str | None, search_capable: bool = False) -> str:
     if search_capable:
         prompt += SEARCH_ADDENDUM
     return prompt
+
+
+def search_block_prompt(search_block: str) -> str:
+    """Wrap a live-search block ([W#]/[X#]/[A#]) in the extraction + citation
+    rules. Shared by the legacy injection path and agent tool results."""
+    return (
+        "Live web search results, fetched moments ago. Use these as the authoritative "
+        "answer for any current/factual claim — they supersede your training data.\n\n"
+        "Rules:\n"
+        "1. Find and STATE the answer. Quote numbers verbatim ($4,715.06 stays as "
+        "$4,715.06). Cite every fact with the source's [W#] / [X#] / [A#] marker.\n"
+        "2. Prefer numbers paired with today's date, this week, or words like 'now', "
+        "'today', 'currently', 'spot', 'live', 'as of'. Treat them as the current value "
+        "and report them as such.\n"
+        "3. Numbers tied to old dates ('reached $X in 1980', 'record high in 2020') are "
+        "historical — do not present them as the current value, and do not extrapolate "
+        "or average a current price from them.\n"
+        "4. If every number you find is historical: state that plainly, give the most "
+        "recent dated figure with its date and citation, and stop. Do not guess a range.\n"
+        "5. Do not invent [L#] markers (those are memory, not search). Cite only the "
+        "[W#] / [X#] / [A#] markers that appear in the block below — not markers from "
+        "earlier turns in the conversation.\n"
+        "6. Do not echo these rules in your answer. Just answer.\n\n"
+        + search_block
+    )
