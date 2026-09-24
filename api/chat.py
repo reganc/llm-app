@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 import conversations as conv_store
 import memory as mem
 import ollama as oll
+import rewrite
 import search
 import x_search
 from auth import verify_api_key
@@ -459,6 +460,18 @@ def _inject_context(messages: list[dict], *, search_block: str | None,
     return out
 
 
+async def _retrieval_query(history: list[dict], query: str, *,
+                           enabled: bool) -> str:
+    """Standalone form of a follow-up for retrieval/search (see rewrite.py).
+
+    The model still answers the user's original words; only memory recall, the
+    search router and web search use the rewrite.
+    """
+    if not enabled:
+        return query
+    return await rewrite.rewrite_query(history, query)
+
+
 async def _resolve_context(query: str, command: str | None,
                            stream: bool, allow_two_pass: bool, *,
                            use_search: bool, use_memory: bool,
@@ -666,12 +679,15 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
                                command: str | None, message_id: str,
                                intent_signals: list[str] | None = None,
                                memory_chunks: list[dict] | None = None,
+                               retrieval_query: str | None = None,
                                on_token=None, timeout: float = 180.0):
     """Yield Ollama SSE chunks. Emits llm.message_id first, then content,
     then llm.memory + llm.web_search summaries (if any) just before [DONE]."""
     search_sum = _search_summary(search_result, command, intent_signals)
     mem_sum = _memory_summary(memory_chunks, command)
     yield f"event: llm.message_id\ndata: {json.dumps({'id': message_id})}\n\n"
+    if retrieval_query:
+        yield f"event: llm.retrieval_query\ndata: {json.dumps({'query': retrieval_query})}\n\n"
     if mem_sum:
         yield f"event: llm.memory\ndata: {json.dumps(mem_sum)}\n\n"
     saw_done = False
@@ -715,8 +731,12 @@ async def chat_completions(req: ChatRequest):
         and not req.stream and not command
         and req.response_format is None
     )
+    retrieval_query = await _retrieval_query(
+        [m.model_dump() for m in req.messages[:-1]], clean,
+        enabled=use_search or use_memory,
+    )
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
-        clean, command, req.stream, allow_two_pass,
+        retrieval_query, command, req.stream, allow_two_pass,
         use_search=use_search, use_memory=use_memory, store=req.store,
     )
 
@@ -738,7 +758,7 @@ async def chat_completions(req: ChatRequest):
     search_block = search_result["context_text"] if search_result and search_result.get("context_text") else None
     memory_block = (
         None if search_primary
-        else (mem.build_context_block(chunks, max_chars=mem_chars, query=clean)
+        else (mem.build_context_block(chunks, max_chars=mem_chars, query=retrieval_query)
               if chunks else None)
     )
     messages = _inject_context(
@@ -762,6 +782,7 @@ async def chat_completions(req: ChatRequest):
             async for chunk in _stream_with_summary(
                 payload, search_result=search_result, command=command,
                 message_id=message_id, intent_signals=intent_signals,
+                retrieval_query=retrieval_query if retrieval_query != clean else None,
                 memory_chunks=chunks, on_token=buf.append,
             ):
                 yield chunk
@@ -793,6 +814,8 @@ async def chat_completions(req: ChatRequest):
                 message_id=message_id,
             ))
         extra: dict = {"message_id": message_id}
+        if retrieval_query != clean:
+            extra["retrieval_query"] = retrieval_query
         ws_summary = _search_summary(search_result, command, intent_signals)
         if ws_summary:
             extra["web_search"] = ws_summary
@@ -824,8 +847,12 @@ async def reasoning(req: ReasoningRequest):
     # A per-request opt-in can never re-enable memory the server disabled.
     use_memory = CFG.memory_enabled and (req.memory is None or req.memory)
     allow_two_pass = use_search and not req.stream and not command
+    retrieval_query = await _retrieval_query(
+        [m.model_dump() for m in req.messages[:-1]], clean,
+        enabled=use_search or use_memory,
+    )
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
-        clean, command, req.stream, allow_two_pass,
+        retrieval_query, command, req.stream, allow_two_pass,
         use_search=use_search, use_memory=use_memory, store=req.store,
     )
 
@@ -838,7 +865,7 @@ async def reasoning(req: ReasoningRequest):
     search_block = search_result["context_text"] if search_result and search_result.get("context_text") else None
     memory_block = (
         None if search_primary
-        else (mem.build_context_block(chunks, max_chars=mem_chars, query=clean)
+        else (mem.build_context_block(chunks, max_chars=mem_chars, query=retrieval_query)
               if chunks else None)
     )
     messages = _inject_context(
@@ -861,6 +888,7 @@ async def reasoning(req: ReasoningRequest):
             async for chunk in _stream_with_summary(
                 payload, search_result=search_result, command=command,
                 message_id=message_id, intent_signals=intent_signals,
+                retrieval_query=retrieval_query if retrieval_query != clean else None,
                 memory_chunks=chunks, on_token=buf.append,
                 timeout=CFG.reasoning_timeout_s,
             ):
@@ -905,6 +933,8 @@ async def reasoning(req: ReasoningRequest):
                        "system_prompt_used": req.system_prompt_key,
                        "message_id": message_id,
                        "reasoning_truncated": truncated}
+        if retrieval_query != clean:
+            extra["retrieval_query"] = retrieval_query
         ws_summary = _search_summary(search_result, command, intent_signals)
         if ws_summary:
             extra["web_search"] = ws_summary
@@ -989,8 +1019,12 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
     ]
 
     allow_two_pass = CFG.search_enabled and not req.stream and not command
+    retrieval_query = await _retrieval_query(
+        conv["messages"][:-1], clean,
+        enabled=CFG.search_enabled or CFG.memory_enabled,
+    )
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
-        clean, command, req.stream, allow_two_pass,
+        retrieval_query, command, req.stream, allow_two_pass,
         use_search=CFG.search_enabled, use_memory=CFG.memory_enabled,
     )
 
@@ -1002,7 +1036,7 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
     search_block = search_result["context_text"] if search_result and search_result.get("context_text") else None
     memory_block = (
         None if search_primary
-        else (mem.build_context_block(chunks, max_chars=mem_chars, query=clean)
+        else (mem.build_context_block(chunks, max_chars=mem_chars, query=retrieval_query)
               if chunks else None)
     )
     base = _inject_context(
@@ -1024,6 +1058,7 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
             async for chunk in _stream_with_summary(
                 payload, search_result=search_result, command=command,
                 message_id=message_id, intent_signals=intent_signals,
+                retrieval_query=retrieval_query if retrieval_query != clean else None,
                 memory_chunks=chunks, on_token=buf.append,
             ):
                 yield chunk
@@ -1062,6 +1097,8 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
                 "total_tokens": data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
             },
         }
+        if retrieval_query != clean:
+            out["retrieval_query"] = retrieval_query
         ws_summary = _search_summary(search_result, command, intent_signals)
         if ws_summary:
             out["web_search"] = ws_summary
