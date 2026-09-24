@@ -121,6 +121,7 @@ services:
       - MEMORY_MIN_SCORE=${MEMORY_MIN_SCORE:-0.70}
       # Native tool-calling agent for /v1/chat/completions (false = legacy router)
       - AGENT_TOOLS=${AGENT_TOOLS:-true}
+      - SEARXNG_ENGINES=${SEARXNG_ENGINES:-google,brave,bing}
       # Background schedulers
       #   Default mode is "window": run back-to-back batches inside the
       #   nightly [start, end] window until the backlog drains, then idle

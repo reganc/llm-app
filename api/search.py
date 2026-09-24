@@ -263,10 +263,16 @@ async def searxng_search(query: str, num: int) -> list[dict]:
             r = await client.get(
                 f"{CFG.searxng_url}/search",
                 params={"q": query, "format": "json",
-                        "engines": "google,bing,duckduckgo", "lang": "en"},
+                        "engines": CFG.searxng_engines, "lang": "en"},
             )
             r.raise_for_status()
-            results = r.json().get("results", [])[:num]
+            body = r.json()
+            # SearXNG degrades silently: a blocked engine just contributes
+            # nothing. Surface it, or the only symptom is worse answers.
+            if dead := body.get("unresponsive_engines"):
+                log.warning("searxng unresponsive engines: %s",
+                            ", ".join(f"{e} ({why})" for e, why in dead))
+            results = body.get("results", [])[:num]
             return [
                 {"title": x.get("title", ""), "url": x.get("url", ""),
                  "snippet": x.get("content", ""),

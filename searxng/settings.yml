@@ -31,6 +31,10 @@ engines:
     engine: bing
     shortcut: b
     disabled: false
+  - name: brave
+    engine: brave
+    shortcut: br
+    disabled: false
   - name: duckduckgo
     engine: duckduckgo
     shortcut: d
