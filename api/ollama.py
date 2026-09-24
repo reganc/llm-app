@@ -14,6 +14,11 @@ from config import CFG, get_active_model
 log = logging.getLogger("llm-api.ollama")
 
 _DEFAULT_ALIASES = {"", "default", "auto"}
+OLLAMA_ALIAS = "default"
+
+# The model the Ollama-side `default` tag is *known* to point at — set only
+# when copy_model(source, "default") succeeds. None = unconfirmed.
+_alias_target: str | None = None
 
 
 def normalize_model(model: str | None) -> str:
@@ -21,11 +26,17 @@ def normalize_model(model: str | None) -> str:
 
     Downstream apps should pass ``model="default"`` so a server-side swap via
     ``/v1/settings`` or ``DEFAULT_MODEL`` env propagates without per-app edits.
+
+    The active model is sent to Ollama *as* ``default`` once that alias is
+    confirmed to point at it. Ollama keys runners by name, so sending the
+    concrete tag while direct-to-Ollama apps send ``default`` loaded the same
+    weights twice, and the two runners evicted each other on a 12 GB card.
     """
     cleaned = (model or "").removesuffix(" [Search+Memory]").strip()
-    if cleaned.lower() in _DEFAULT_ALIASES:
-        return get_active_model()
-    return cleaned
+    resolved = get_active_model() if cleaned.lower() in _DEFAULT_ALIASES else cleaned
+    if _alias_target is not None and resolved == _alias_target:
+        return OLLAMA_ALIAS
+    return resolved
 
 
 def build_payload(messages: list[dict], model: str, *, temperature: float = 0.7,
@@ -270,6 +281,9 @@ async def copy_model(source: str, destination: str) -> bool:
             if not ok:
                 log.warning("ollama copy %s→%s failed: %s %s",
                             source, destination, r.status_code, r.text[:200])
+            elif destination == OLLAMA_ALIAS:
+                global _alias_target
+                _alias_target = source
             return ok
     except Exception as e:
         log.warning("ollama copy %s→%s failed: %s", source, destination, e)
