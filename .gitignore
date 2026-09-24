@@ -95,3 +95,8 @@ playwright-report/
 ############################
 storybook-static/
 api_old_snapshot/
+
+############################
+# Eval run outputs
+############################
+evals/results/
