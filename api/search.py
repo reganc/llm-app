@@ -464,6 +464,27 @@ _FORCE_X_RE = re.compile(
 )
 
 
+# Present-tense "who holds this role" questions. The answer goes stale and the
+# model answers from training data regardless of tool guidance, so route them
+# deterministically. Past tense ("who was the first president") never matches.
+_ROLE = (
+    r"(?:ceo|cto|cfo|coo|chief executive|president|vice[- ]president|"
+    r"prime minister|premier|chancellor|chair(?:man|woman|person)?|"
+    r"head coach|head|coach|leader|director|governor|mayor|"
+    r"secretary(?: of [a-z]+)?|minister(?: of [a-z]+)?|attorney general|speaker|"
+    r"king|queen|monarch|pope|members?|justices?|owner|manager|commissioner)"
+)
+_CURRENT_ROLE_RE = re.compile(
+    r"\bwho(?:'s|’s|\s+is|\s+are)\s+"
+    r"(?:in charge of\b"
+    r"|(?:[\w.&-]+(?:'s|’s)\s+)?(?:the\s+)?"
+    r"(?:(?:current|new|acting|incumbent|sitting)\s+)?(?:[\w.-]+\s+){0,2}?"
+    + _ROLE + r"\b)"
+    r"|\bwho\s+(?:currently\s+)?(?:runs|leads|heads|owns|chairs|manages|coaches|governs)\b",
+    re.IGNORECASE,
+)
+
+
 def detect_intent(query: str) -> dict:
     """Fast, deterministic signal extraction. No LLM. Returns flags + matched signals."""
     if not query or not query.strip():
@@ -477,6 +498,9 @@ def detect_intent(query: str) -> dict:
     for m in _FORCE_X_RE.finditer(query):
         signals.append(m.group(0).lower())
         force_x = True
+    for m in _CURRENT_ROLE_RE.finditer(query):
+        signals.append("role:" + " ".join(m.group(0).lower().split()))
+        force_search = True
     if force_x:
         force_search = True  # X queries always need a fresh fetch
     # Dedupe while preserving order
