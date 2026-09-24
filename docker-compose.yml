@@ -118,6 +118,7 @@ services:
       - CHUNK_SIZE=800
       - CHUNK_OVERLAP=150
       - MEMORY_TOP_K=5
+      - MEMORY_MIN_SCORE=${MEMORY_MIN_SCORE:-0.70}
       # Background schedulers
       #   Default mode is "window": run back-to-back batches inside the
       #   nightly [start, end] window until the backlog drains, then idle

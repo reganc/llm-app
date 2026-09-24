@@ -39,6 +39,7 @@ class Config:
     chunk_size: int
     chunk_overlap: int
     memory_top_k: int
+    memory_min_score: float
     database_url: str
     embed_dim: int
     db_pool_min: int
@@ -86,6 +87,10 @@ CFG = Config(
     chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
     chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "150")),
     memory_top_k=int(os.getenv("MEMORY_TOP_K", "5")),
+    # Auto-recall relevance floor (cosine). Measured on the eval set: relevant
+    # hits scored >= 0.70, unrelated ones ~0.50-0.68 (BM25-only hits are 0.55).
+    # 0 disables the gate.
+    memory_min_score=float(os.getenv("MEMORY_MIN_SCORE", "0.70")),
     database_url=os.getenv("DATABASE_URL", "postgresql://llm:llm@db:5432/llmrag"),
     embed_dim=int(os.getenv("EMBED_DIM", "768")),
     db_pool_min=int(os.getenv("DB_POOL_MIN", "1")),

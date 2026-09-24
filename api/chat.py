@@ -460,6 +460,12 @@ def _inject_context(messages: list[dict], *, search_block: str | None,
     return out
 
 
+def _relevant(chunks: list[dict], query: str) -> list[dict]:
+    """Auto-recall gate (see memory.filter_relevant). Library mode and exact
+    title/URL matches bypass it — the user pointed at those explicitly."""
+    return mem.filter_relevant(chunks, query, min_score=CFG.memory_min_score)
+
+
 async def _retrieval_query(history: list[dict], query: str, *,
                            enabled: bool) -> str:
     """Standalone form of a follow-up for retrieval/search (see rewrite.py).
@@ -551,7 +557,7 @@ async def _resolve_context(query: str, command: str | None,
         chunks = _merge_url_matches(chunks, title_matches)
         return None, chunks, False, intent_signals, command
 
-    chunks = await mem.retrieve(query) if query else []
+    chunks = _relevant(await mem.retrieve(query), query) if query else []
     if title_matches:
         seen_ids = {c.get("identifier") for c in title_matches if c.get("identifier")}
         chunks = title_matches + [c for c in chunks
@@ -580,12 +586,12 @@ async def _resolve_context(query: str, command: str | None,
         if await search.should_auto_search(chunks, query):
             search_result = await search.search_and_ingest(query, store_memory=store)
             if search_result.get("stored", 0) > 0:
-                chunks = await mem.retrieve(query)
+                chunks = _relevant(await mem.retrieve(query), query)
             two_pass = False
     elif use_search and await search.should_auto_search(chunks, query):
         search_result = await search.search_and_ingest(query, store_memory=store)
         if search_result.get("stored", 0) > 0:
-            chunks = await mem.retrieve(query)
+            chunks = _relevant(await mem.retrieve(query), query)
         two_pass = False
 
     return search_result, chunks, two_pass, intent_signals, command

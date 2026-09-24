@@ -656,6 +656,30 @@ def _normalize_url(url: str) -> str:
     return _URL_NORM_RE.sub("", url.strip()).rstrip("/").lower()
 
 
+def filter_relevant(chunks: list[dict], query: str, *,
+                    min_score: float) -> list[dict]:
+    """Keep chunks that are plausibly about `query` (auto-recall gate).
+
+    `retrieve` always returns top-k however weak the match, and junk injected
+    under an "authoritative library" prompt gets used as fact. A chunk stays
+    only if its score clears `min_score` AND its title/text contains at least
+    one query content term. Order is preserved. ``min_score <= 0`` disables
+    the gate entirely (kill switch / A-B baseline).
+    """
+    if min_score <= 0:
+        return list(chunks)
+    terms = [t.strip("'’-") for t in _query_terms(query)]
+    terms = [t for t in terms if t]
+    kept = []
+    for c in chunks:
+        if (c.get("score") or 0) < min_score:
+            continue
+        if terms and not _term_hits(f"{c.get('title', '')} {c.get('text', '')}", terms):
+            continue
+        kept.append(c)
+    return kept
+
+
 # ── Retrieve ─────────────────────────────────────────────────────────────────
 def _score_with_feedback(distance: float, rating: str | None) -> tuple[float, float]:
     """(adjusted_score, base_score) given cosine distance and feedback."""
