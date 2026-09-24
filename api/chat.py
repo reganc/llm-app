@@ -115,6 +115,10 @@ class ChatRequest(BaseModel):
     search: bool | None = None
     memory: bool | None = None
     raw: bool = False
+    # False = read memory but never write it: skips storing the conversation
+    # turn and ingesting web-search pages. For evals and batch callers whose
+    # turns would otherwise be recalled as "memory" by later requests.
+    store: bool = True
 
     model_config = {"extra": "ignore"}
 
@@ -142,6 +146,7 @@ class ReasoningRequest(BaseModel):
     # usually the point of asking this gateway.
     search: bool | None = None
     memory: bool | None = None
+    store: bool = True  # see ChatRequest.store
 
     model_config = {"extra": "ignore"}
 
@@ -456,7 +461,8 @@ def _inject_context(messages: list[dict], *, search_block: str | None,
 
 async def _resolve_context(query: str, command: str | None,
                            stream: bool, allow_two_pass: bool, *,
-                           use_search: bool, use_memory: bool
+                           use_search: bool, use_memory: bool,
+                           store: bool = True
                            ) -> tuple[dict | None, list[dict], bool, list[str], str | None]:
     """Run memory retrieval + optional search up-front.
 
@@ -552,19 +558,19 @@ async def _resolve_context(query: str, command: str | None,
             log.info("intent: forcing /search (signals=%s)", intent_signals)
 
     if command == "x":
-        search_result = await x_search.search_x_and_ingest(query, store_memory=True)
+        search_result = await x_search.search_x_and_ingest(query, store_memory=store)
         two_pass = False
     elif command == "search":
-        search_result = await search.search_and_ingest(query, store_memory=True)
+        search_result = await search.search_and_ingest(query, store_memory=store)
         two_pass = False
     elif stream and use_search:
         if await search.should_auto_search(chunks, query):
-            search_result = await search.search_and_ingest(query, store_memory=True)
+            search_result = await search.search_and_ingest(query, store_memory=store)
             if search_result.get("stored", 0) > 0:
                 chunks = await mem.retrieve(query)
             two_pass = False
     elif use_search and await search.should_auto_search(chunks, query):
-        search_result = await search.search_and_ingest(query, store_memory=True)
+        search_result = await search.search_and_ingest(query, store_memory=store)
         if search_result.get("stored", 0) > 0:
             chunks = await mem.retrieve(query)
         two_pass = False
@@ -574,7 +580,7 @@ async def _resolve_context(query: str, command: str | None,
 
 async def _two_pass_chat(messages: list[dict], model: str, temperature: float,
                          max_tokens: int, top_p: float, stop: list | None,
-                         *, thinking: bool = False,
+                         *, thinking: bool = False, store: bool = True,
                          timeout: float = 180.0) -> tuple[dict, dict | None]:
     """Let the model request a web search, then answer with the results.
 
@@ -594,7 +600,7 @@ async def _two_pass_chat(messages: list[dict], model: str, temperature: float,
     if not m:
         return data, None
     query = m.group(1).strip()
-    result = await search.search_and_ingest(query, store_memory=True)
+    result = await search.search_and_ingest(query, store_memory=store)
     if result.get("error") or not result.get("context_text"):
         retry = oll.build_payload(_strip_search_capability(messages), model,
                                   temperature=temperature, max_tokens=max_tokens,
@@ -711,7 +717,7 @@ async def chat_completions(req: ChatRequest):
     )
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         clean, command, req.stream, allow_two_pass,
-        use_search=use_search, use_memory=use_memory,
+        use_search=use_search, use_memory=use_memory, store=req.store,
     )
 
     messages = (
@@ -760,7 +766,7 @@ async def chat_completions(req: ChatRequest):
             ):
                 yield chunk
             reply_text = "".join(buf)
-            if use_memory and inject_system and req.messages:
+            if req.store and use_memory and inject_system and req.messages:
                 asyncio.create_task(mem.store_conversation_turn(
                     conv_id=f"chat_{int(time.time())}",
                     conv_name=f"Chat ({req.system_prompt_key or 'default'})",
@@ -773,13 +779,13 @@ async def chat_completions(req: ChatRequest):
         if two_pass:
             data, search_result = await _two_pass_chat(
                 final_messages, req.model, req.temperature, req.max_tokens,
-                req.top_p, req.stop,
+                req.top_p, req.stop, store=req.store,
             )
         else:
             data = await oll.chat(payload)
         reply = data.get("message", {}).get("content", "")
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
-        if use_memory and inject_system and req.messages:
+        if req.store and use_memory and inject_system and req.messages:
             asyncio.create_task(mem.store_conversation_turn(
                 conv_id=f"chat_{int(time.time())}",
                 conv_name=f"Chat ({req.system_prompt_key or 'default'})",
@@ -820,7 +826,7 @@ async def reasoning(req: ReasoningRequest):
     allow_two_pass = use_search and not req.stream and not command
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         clean, command, req.stream, allow_two_pass,
-        use_search=use_search, use_memory=use_memory,
+        use_search=use_search, use_memory=use_memory, store=req.store,
     )
 
     messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
@@ -862,7 +868,7 @@ async def reasoning(req: ReasoningRequest):
             reply_text = "".join(buf)
             # An empty reply (budget consumed by reasoning) must not be written
             # back into RAG memory — it would poison later retrievals.
-            if use_memory and req.messages and reply_text.strip():
+            if req.store and use_memory and req.messages and reply_text.strip():
                 asyncio.create_task(mem.store_conversation_turn(
                     conv_id=f"reasoning_{int(time.time())}",
                     conv_name=f"Reasoning ({req.system_prompt_key})",
@@ -874,7 +880,7 @@ async def reasoning(req: ReasoningRequest):
         if two_pass:
             data, search_result = await _two_pass_chat(
                 final_messages, req.model, req.temperature, reasoning_budget, 0.95, None,
-                thinking=True, timeout=CFG.reasoning_timeout_s,
+                thinking=True, store=req.store, timeout=CFG.reasoning_timeout_s,
             )
         else:
             data = await oll.chat(payload, timeout=CFG.reasoning_timeout_s)
@@ -888,7 +894,7 @@ async def reasoning(req: ReasoningRequest):
                         reasoning_budget, data.get("eval_count"))
             reply = thinking.strip()
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
-        if use_memory and req.messages and reply.strip():
+        if req.store and use_memory and req.messages and reply.strip():
             asyncio.create_task(mem.store_conversation_turn(
                 conv_id=f"reasoning_{int(time.time())}",
                 conv_name=f"Reasoning ({req.system_prompt_key})",
