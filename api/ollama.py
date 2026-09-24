@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import time
 import uuid
 from typing import AsyncIterator
@@ -13,8 +12,6 @@ import httpx
 from config import CFG, get_active_model
 
 log = logging.getLogger("llm-api.ollama")
-
-_THINKING_MODEL_RE = re.compile(r"qwen3|deepseek-r1|phi4.*reason|qwopus", re.IGNORECASE)
 
 _DEFAULT_ALIASES = {"", "default", "auto"}
 
@@ -31,29 +28,11 @@ def normalize_model(model: str | None) -> str:
     return cleaned
 
 
-def is_thinking_model(model: str) -> bool:
-    return bool(_THINKING_MODEL_RE.search(normalize_model(model)))
-
-
-def maybe_no_think(messages: list[dict], model: str) -> list[dict]:
-    """qwen3/deepseek-r1/qwopus: prepend /no_think to skip the thinking phase."""
-    if not is_thinking_model(normalize_model(model)):
-        return messages
-    out = list(messages)
-    for i in range(len(out) - 1, -1, -1):
-        if out[i]["role"] == "user":
-            content = out[i]["content"]
-            if not content.startswith("/no_think"):
-                out[i] = {**out[i], "content": "/no_think " + content}
-            break
-    return out
-
-
 def build_payload(messages: list[dict], model: str, *, temperature: float = 0.7,
                   max_tokens: int = 2048, top_p: float = 0.9,
                   stop: list | None = None, stream: bool = False,
-                  thinking: bool = False) -> dict:
-    return {
+                  thinking: bool = False, fmt: str | dict | None = None) -> dict:
+    payload: dict = {
         "model": normalize_model(model),
         "messages": messages,
         "stream": stream,
@@ -66,6 +45,11 @@ def build_payload(messages: list[dict], model: str, *, temperature: float = 0.7,
             "stop": stop or [],
         },
     }
+    # Ollama-native structured output: "json" or a JSON-schema dict. Only set
+    # when a caller asks for it, so default chat behavior is unchanged.
+    if fmt is not None:
+        payload["format"] = fmt
+    return payload
 
 
 async def chat(payload: dict, *, timeout: float = 180.0) -> dict:
@@ -98,17 +82,21 @@ async def generate(prompt: str, *, model: str | None = None, system: str | None 
         return r.json()
 
 
-async def stream_chat(payload: dict, on_token=None) -> AsyncIterator[str]:
+async def stream_chat(payload: dict, on_token=None, *,
+                      timeout: float = 180.0) -> AsyncIterator[str]:
     """
     Yield SSE-formatted chunks compatible with OpenAI's streaming response.
     on_token(text) is invoked for each text delta (used to capture full reply).
     """
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    async with httpx.AsyncClient(timeout=180.0) as client:
+    saw_content = False
+    think_buf: list[str] = []
+    async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", f"{CFG.ollama_url}/api/chat", json=payload) as r:
             if r.status_code != 200:
-                err = f"Ollama returned {r.status_code}"
-                yield _sse(chunk_id, payload["model"], delta=err, done=True)
+                err = f"[Error: Ollama returned {r.status_code}]"
+                yield _sse(chunk_id, payload["model"], delta=err, done=False)
+                yield _sse(chunk_id, payload["model"], delta="", done=True)
                 yield "data: [DONE]\n\n"
                 return
             async for line in r.aiter_lines():
@@ -119,20 +107,48 @@ async def stream_chat(payload: dict, on_token=None) -> AsyncIterator[str]:
                 except json.JSONDecodeError:
                     continue
                 if "error" in obj:
-                    yield _sse(chunk_id, payload["model"], delta=f"[Error: {obj['error']}]", done=True)
+                    yield _sse(chunk_id, payload["model"],
+                               delta=f"[Error: {obj['error']}]", done=False)
+                    yield _sse(chunk_id, payload["model"], delta="", done=True)
                     yield "data: [DONE]\n\n"
                     return
-                content = obj.get("message", {}).get("content", "")
+                m = obj.get("message", {}) or {}
+                content = m.get("content", "") or ""
+                reasoning = m.get("thinking", "") or ""
                 done = obj.get("done", False)
-                if content and on_token:
-                    on_token(content)
+                # Forward reasoning as a separate delta channel so clients can show
+                # progress instead of stalling on an empty stream while the model thinks.
+                if reasoning:
+                    think_buf.append(reasoning)
+                    yield _sse(chunk_id, payload["model"], delta="",
+                               reasoning=reasoning, done=False)
+                if content:
+                    saw_content = True
+                    if on_token:
+                        on_token(content)
+                # Reasoning consumed the whole budget: emit it as content rather than
+                # closing the stream with nothing at all.
+                if done and not saw_content and think_buf:
+                    fallback = "".join(think_buf).strip()
+                    if fallback:
+                        if on_token:
+                            on_token(fallback)
+                        yield _sse(chunk_id, payload["model"], delta=fallback, done=False)
                 yield _sse(chunk_id, payload["model"], delta=content, done=done)
                 if done:
                     yield "data: [DONE]\n\n"
                     return
 
 
-def _sse(chunk_id: str, model: str, *, delta: str, done: bool) -> str:
+def _delta(content: str, reasoning: str = "") -> dict:
+    d: dict = {"content": content}
+    if reasoning:
+        d["reasoning"] = reasoning
+    return d
+
+
+def _sse(chunk_id: str, model: str, *, delta: str, done: bool,
+         reasoning: str = "") -> str:
     body = {
         "id": chunk_id,
         "object": "chat.completion.chunk",
@@ -140,7 +156,7 @@ def _sse(chunk_id: str, model: str, *, delta: str, done: bool) -> str:
         "model": model,
         "choices": [{
             "index": 0,
-            "delta": {"content": delta} if not done else {},
+            "delta": _delta(delta, reasoning) if not done else {},
             "finish_reason": "stop" if done else None,
         }],
     }
@@ -148,7 +164,19 @@ def _sse(chunk_id: str, model: str, *, delta: str, done: bool) -> str:
 
 
 def completion_envelope(data: dict, model: str, extra: dict | None = None) -> dict:
-    content = data.get("message", {}).get("content", "")
+    msg = data.get("message", {}) or {}
+    content = msg.get("content", "") or ""
+    # Thinking models emit reasoning tokens before any content. If num_predict is
+    # exhausted mid-reasoning, Ollama returns content="" with done_reason="length".
+    # Surfacing the reasoning beats handing the caller a silent empty string.
+    thinking = msg.get("thinking", "") or ""
+    truncated = data.get("done_reason") == "length"
+    assistant: dict = {"role": "assistant", "content": content}
+    if thinking:
+        assistant["reasoning"] = thinking
+    if not content.strip() and thinking.strip():
+        assistant["content"] = thinking.strip()
+        assistant["reasoning_fallback"] = True
     out = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
         "object": "chat.completion",
@@ -156,8 +184,8 @@ def completion_envelope(data: dict, model: str, extra: dict | None = None) -> di
         "model": model,
         "choices": [{
             "index": 0,
-            "message": {"role": "assistant", "content": content},
-            "finish_reason": "stop",
+            "message": assistant,
+            "finish_reason": "length" if truncated else "stop",
         }],
         "usage": {
             "prompt_tokens": data.get("prompt_eval_count", 0),

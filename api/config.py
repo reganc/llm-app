@@ -29,6 +29,8 @@ class Config:
     embed_model: str
     api_key: str
     max_tokens: int
+    reasoning_max_tokens: int
+    reasoning_timeout_s: float
     cors_origins: list[str]
     rate_limit_enabled: bool
     rate_limit_default: str
@@ -68,10 +70,15 @@ def _csv(name: str, default: str) -> list[str]:
 
 CFG = Config(
     ollama_url=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/"),
-    default_model=os.getenv("DEFAULT_MODEL", "huihui_ai/qwen2.5-abliterate:14b"),
+    default_model=os.getenv("DEFAULT_MODEL", "huihui_ai/qwen3.5-abliterated:9b"),
     embed_model=os.getenv("EMBED_MODEL", "nomic-embed-text"),
     api_key=os.getenv("API_KEY", "change-me-in-production"),
     max_tokens=int(os.getenv("MAX_TOKENS", "4096")),
+    # Thinking models (qwen3.5+) spend reasoning tokens *before* emitting any
+    # content, so num_predict must cover reasoning + answer. A 4096 budget can
+    # be fully consumed by reasoning alone, yielding an empty reply.
+    reasoning_max_tokens=int(os.getenv("REASONING_MAX_TOKENS", "16384")),
+    reasoning_timeout_s=float(os.getenv("REASONING_TIMEOUT_S", "600")),
     cors_origins=_csv("CORS_ORIGINS", "*"),
     rate_limit_enabled=os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true",
     rate_limit_default=os.getenv("RATE_LIMIT", "120/minute"),

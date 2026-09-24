@@ -106,11 +106,71 @@ All require `Authorization: Bearer <API_KEY>` except `/health`, `/metrics`, `/`,
 
 - `GET  /` — Brand-new SPA (single chat surface for everything)
 - `POST /v1/chat/completions` — OpenAI-compatible chat (streaming supported)
-- `POST /v1/chat/reasoning` — Chain-of-thought reasoning mode
+- `POST /v1/chat/reasoning` — Chain-of-thought reasoning mode (see below)
 - `POST /v1/completions` — Raw text completion
 - `GET  /v1/models` — List available models
 - `GET/PATCH /v1/settings` — Read/update default model + system prompt
 - `GET  /v1/system-prompts` — List preset system prompts
+
+## Tests
+
+```bash
+pip install -r api/requirements-dev.txt   # pytest, on top of the runtime deps
+pytest                                    # from llm-app/
+```
+
+`tests/` lives outside `api/`, so it is not part of the `./api:/app` container
+mount and never ships in the image. `tests/conftest.py` points `DATA_DIR` at a
+temp dir before importing app modules (`api/config.py` creates it at import
+time) and puts `api/` on `sys.path`.
+
+Coverage:
+
+| File | What it pins |
+|---|---|
+| `test_ollama_envelope.py` | `completion_envelope` — reasoning fallback, `finish_reason`, null/whitespace edges |
+| `test_ollama_stream.py` | `stream_chat` — `delta.reasoning`, end-of-stream flush, error surfacing |
+| `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
+
+All three are offline: Ollama, search and memory are stubbed, and the endpoint
+tests mount `chat.router` on a bare `FastAPI()` rather than importing `main`,
+avoiding its lifespan (postgres pool, warmup, schedulers) and rate-limit
+middleware. No services, database or network required.
+
+Note the layering: the endpoint tests stub `oll.stream_chat`, so they pin that
+the SSE wrapper *forwards* reasoning deltas and closes the stream correctly.
+Whether `stream_chat` *produces* those deltas is `test_ollama_stream.py`'s job,
+against a fake httpx client. Break either half and a different file fails.
+
+### `/v1/chat/reasoning` and thinking models
+
+This is the only endpoint that runs with `think: true`. With Qwen3.5 the model
+emits **reasoning tokens before any content**, which has three consequences:
+
+- **Budget.** `num_predict` must cover reasoning *and* the answer. The endpoint
+  ignores a smaller caller value and uses at least `REASONING_MAX_TOKENS`
+  (default 16384) — the 4096 chat budget can be consumed entirely by reasoning,
+  which previously returned an empty string.
+- **Truncation is reported, not hidden.** If reasoning exhausts the budget the
+  response carries `finish_reason: "length"`, `reasoning_truncated: true`, and
+  `message.reasoning_fallback: true`, and the reasoning text is returned as the
+  content rather than an empty reply. `message.reasoning` always carries the raw
+  thinking when present. Streaming sends it as `delta.reasoning`.
+- **Auto web-search defaults OFF here** (unlike `/v1/chat/completions`, where
+  it follows `SEARCH_ENABLED`). Reasoning tokens get spent reconciling
+  retrieved material, so an irrelevant search can consume the whole budget.
+  Pass `"search": true` to opt in per request. Explicit `/search` and `/x`
+  commands still run regardless. Memory/RAG recall keeps the server default —
+  it is far cheaper; disable it with `"memory": false`.
+
+Timeout is `REASONING_TIMEOUT_S` (default 600s), not the 180s used elsewhere —
+a full reasoning pass can take minutes.
+
+`_two_pass_chat` (the model-requests-a-search flow) takes `thinking` and applies
+it to **every** pass. Its first pass doubles as the answer whenever the model
+declines to search, so reasoning there is not optional. Other callers leave the
+flag False and are unchanged.
+
 - `POST /v1/conversations` — Create persistent conversation
 - `GET  /v1/conversations` — List conversations
 - `GET  /v1/conversations/{id}` — Get full history

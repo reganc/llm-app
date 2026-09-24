@@ -43,14 +43,25 @@ No cloud. No API costs. Downstream apps reference one stable alias
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Why Qwen2.5 14B Abliterated on the RTX 3060?
+## Why Qwen3.5 9B Abliterated on the RTX 3060 (12 GB)?
 
-| Model                              | VRAM   | Notes                                     |
-|:-----------------------------------|:-------|:------------------------------------------|
-| **huihui_ai/qwen2.5-abliterate:14b** | ~9 GB  | ✅ **Active default.** No thinking blocks, strong general purpose, leaves room for KV cache |
-| qwen2.5:14b-instruct-q4_K_M        | ~9 GB  | Vanilla (non-abliterated) drop-in         |
-| huihui_ai/qwen3-abliterated:14b    | ~9 GB  | Newer; emits `<think>` blocks (server strips via `/no_think`) |
-| mistral-nemo:12b-instruct          | ~7 GB  | 128k context, slightly weaker reasoning   |
+Measured on this box, not estimated. The 12 GB budget makes *context headroom*,
+not parameter count, the deciding factor — a 14B at Q4 already spills to CPU at
+`NUM_CTX=8192`, and this gateway injects several thousand tokens of RAG/search
+context into a typical request.
+
+| Model                                | Weights | 32K ctx        | Notes |
+|:-------------------------------------|:--------|:---------------|:------|
+| **huihui_ai/qwen3.5-abliterated:9b** | 6.6 GB  | 100% GPU, ~57 t/s | ✅ **Active default.** 64K fits fully on GPU (7.6 GB). 256K ceiling, native tools, vision |
+| qwen3.5:9b                           | 6.6 GB  | 100% GPU, ~57 t/s | Vanilla (non-abliterated) drop-in, Apache 2.0 |
+| huihui_ai/qwen2.5-abliterate:14b     | 9.0 GB  | 56% GPU, ~5 t/s   | Previous default. Spills even at 8K (94% GPU, ~20 t/s) |
+| qwen3.6:27b                          | 17 GB   | — | Dense; cannot fit — would spill like the 14B |
+
+Qwen3.5 is a **thinking** model: reasoning tokens are emitted before any
+content, so a small `max_tokens` returns an empty string rather than a short
+answer. The server sends `think: false` on every path except `/v1/chat/reasoning`.
+Requires Ollama >= 0.18 — on 0.17.x, `think: false` silently disables
+`format`/JSON-schema enforcement (ollama/ollama#14645).
 
 To swap: `PATCH /v1/settings {"default_model": "<tag>"}` — no client code changes
 needed since every consumer requests `model: "default"`.

@@ -93,11 +93,16 @@ services:
     environment:
       # Ollama
       - OLLAMA_BASE_URL=http://ollama:11434
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-huihui_ai/qwen2.5-abliterate:14b}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-huihui_ai/qwen3.5-abliterated:9b}
       - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
       # API
       - API_KEY=${API_KEY:-change-me-in-production}
       - MAX_TOKENS=${MAX_TOKENS:-4096}
+      - NUM_CTX=${NUM_CTX:-8192}
+      # /chat/reasoning runs with think=on; reasoning tokens are spent before
+      # any content, so this budget must cover thinking + answer.
+      - REASONING_MAX_TOKENS=${REASONING_MAX_TOKENS:-16384}
+      - REASONING_TIMEOUT_S=${REASONING_TIMEOUT_S:-600}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       # Per-IP rate limiting (important once exposed via Tailscale Funnel)
       - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}

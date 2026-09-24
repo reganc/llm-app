@@ -105,6 +105,16 @@ class ChatRequest(BaseModel):
     system_prompt_key: str | None = None
     inject_system: bool = True
     stream_options: dict | None = None  # accepted, ignored (OpenAI compat)
+    # Programmatic / structured-output controls. `search`/`memory` are None by
+    # default (= fall back to the server's CFG defaults); set False to opt out
+    # per request. `raw=True` is a shorthand hard opt-out of the gateway's
+    # RAG/search/system-prompt behavior — a clean passthrough for apps that
+    # need deterministic output. `response_format` mirrors the OpenAI field and
+    # is translated to Ollama's native `format` (JSON mode / JSON schema).
+    response_format: dict | None = None
+    search: bool | None = None
+    memory: bool | None = None
+    raw: bool = False
 
     model_config = {"extra": "ignore"}
 
@@ -120,7 +130,20 @@ class ReasoningRequest(BaseModel):
     stream: bool = False
     system_prompt_key: str = "reasoning"
     temperature: float = Field(default=0.3, ge=0.0, le=1.0)
-    max_tokens: int = Field(default=4096)
+    # Reasoning tokens count against num_predict, so this budget must cover the
+    # thinking phase *and* the answer. Defaults to CFG.reasoning_max_tokens
+    # (REASONING_MAX_TOKENS), not the 4096 chat budget.
+    max_tokens: int = Field(default_factory=lambda: CFG.reasoning_max_tokens)
+    # Same per-request opt-outs as ChatRequest, but `search` is opt-IN here:
+    # reasoning tokens are spent reconciling retrieved material, so an
+    # irrelevant auto-search can exhaust the whole budget. Pass search=true to
+    # enable it. Explicit /search and /x commands are unaffected either way.
+    # `memory` (RAG recall) keeps the server default — it is far cheaper and is
+    # usually the point of asking this gateway.
+    search: bool | None = None
+    memory: bool | None = None
+
+    model_config = {"extra": "ignore"}
 
 
 class CompletionRequest(BaseModel):
@@ -153,6 +176,24 @@ def _trim(text: str) -> str:
     if len(text) <= CFG.max_inject_chars:
         return text
     return text[:CFG.max_inject_chars] + "\n[... context trimmed ...]"
+
+
+def _ollama_format(response_format: dict | None) -> str | dict | None:
+    """Translate an OpenAI ``response_format`` into Ollama's ``format`` field.
+
+    ``{"type": "json_object"}``                       -> ``"json"``
+    ``{"type": "json_schema", "json_schema": {...}}`` -> the JSON-schema dict
+    Anything else / ``None``                          -> ``None`` (no structured mode)
+    """
+    if not response_format:
+        return None
+    rf_type = response_format.get("type")
+    if rf_type == "json_object":
+        return "json"
+    if rf_type == "json_schema":
+        js = response_format.get("json_schema") or {}
+        return js.get("schema") or "json"
+    return None
 
 
 def _urls_in_query(query: str) -> list[str]:
@@ -414,7 +455,8 @@ def _inject_context(messages: list[dict], *, search_block: str | None,
 
 
 async def _resolve_context(query: str, command: str | None,
-                           stream: bool, allow_two_pass: bool
+                           stream: bool, allow_two_pass: bool, *,
+                           use_search: bool, use_memory: bool
                            ) -> tuple[dict | None, list[dict], bool, list[str], str | None]:
     """Run memory retrieval + optional search up-front.
 
@@ -424,7 +466,7 @@ async def _resolve_context(query: str, command: str | None,
     can render the right context block.
     """
     intent_signals: list[str] = []
-    if not CFG.memory_enabled:
+    if not use_memory:
         return None, [], allow_two_pass, intent_signals, command
 
     urls = _urls_in_query(query)
@@ -499,7 +541,7 @@ async def _resolve_context(query: str, command: str | None,
     two_pass = allow_two_pass
 
     # Promote deterministic intent into a command when the user didn't type one.
-    if not command and query and CFG.search_enabled:
+    if not command and query and use_search:
         intent = search.detect_intent(query)
         intent_signals = intent.get("signals", []) or []
         if intent.get("force_x") and CFG.x_search_enabled:
@@ -515,13 +557,13 @@ async def _resolve_context(query: str, command: str | None,
     elif command == "search":
         search_result = await search.search_and_ingest(query, store_memory=True)
         two_pass = False
-    elif stream and CFG.search_enabled:
+    elif stream and use_search:
         if await search.should_auto_search(chunks, query):
             search_result = await search.search_and_ingest(query, store_memory=True)
             if search_result.get("stored", 0) > 0:
                 chunks = await mem.retrieve(query)
             two_pass = False
-    elif CFG.search_enabled and await search.should_auto_search(chunks, query):
+    elif use_search and await search.should_auto_search(chunks, query):
         search_result = await search.search_and_ingest(query, store_memory=True)
         if search_result.get("stored", 0) > 0:
             chunks = await mem.retrieve(query)
@@ -531,11 +573,22 @@ async def _resolve_context(query: str, command: str | None,
 
 
 async def _two_pass_chat(messages: list[dict], model: str, temperature: float,
-                         max_tokens: int, top_p: float, stop: list | None) -> tuple[dict, dict | None]:
+                         max_tokens: int, top_p: float, stop: list | None,
+                         *, thinking: bool = False,
+                         timeout: float = 180.0) -> tuple[dict, dict | None]:
+    """Let the model request a web search, then answer with the results.
+
+    `thinking` is threaded into every pass, not just the final one: the first
+    pass doubles as the answer whenever the model does *not* ask to search, so
+    skipping it there would silently drop reasoning on the common path. Callers
+    that do not reason leave it False and are unaffected.
+    """
     payload = oll.build_payload(messages, model, temperature=temperature,
-                                max_tokens=max_tokens, top_p=top_p, stop=stop)
-    data = await oll.chat(payload)
-    content = data.get("message", {}).get("content", "").strip()
+                                max_tokens=max_tokens, top_p=top_p, stop=stop,
+                                thinking=thinking)
+    data = await oll.chat(payload, timeout=timeout)
+    content = (data.get("message", {}) or {}).get("content", "") or ""
+    content = content.strip()
 
     m = _SEARCH_REQUEST_RE.search(content)
     if not m:
@@ -545,16 +598,17 @@ async def _two_pass_chat(messages: list[dict], model: str, temperature: float,
     if result.get("error") or not result.get("context_text"):
         retry = oll.build_payload(_strip_search_capability(messages), model,
                                   temperature=temperature, max_tokens=max_tokens,
-                                  top_p=top_p, stop=stop)
-        return await oll.chat(retry), None
+                                  top_p=top_p, stop=stop, thinking=thinking)
+        return await oll.chat(retry, timeout=timeout), None
 
     follow = messages + [
         {"role": "assistant", "content": content},
         {"role": "user", "content": result["context_text"]},
     ]
     payload2 = oll.build_payload(follow, model, temperature=temperature,
-                                 max_tokens=max_tokens, top_p=top_p, stop=stop)
-    return await oll.chat(payload2), result
+                                 max_tokens=max_tokens, top_p=top_p, stop=stop,
+                                 thinking=thinking)
+    return await oll.chat(payload2, timeout=timeout), result
 
 
 def _search_summary(search_result: dict | None, command: str | None,
@@ -606,7 +660,7 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
                                command: str | None, message_id: str,
                                intent_signals: list[str] | None = None,
                                memory_chunks: list[dict] | None = None,
-                               on_token=None):
+                               on_token=None, timeout: float = 180.0):
     """Yield Ollama SSE chunks. Emits llm.message_id first, then content,
     then llm.memory + llm.web_search summaries (if any) just before [DONE]."""
     search_sum = _search_summary(search_result, command, intent_signals)
@@ -615,7 +669,7 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
     if mem_sum:
         yield f"event: llm.memory\ndata: {json.dumps(mem_sum)}\n\n"
     saw_done = False
-    async for chunk in oll.stream_chat(payload, on_token=on_token):
+    async for chunk in oll.stream_chat(payload, on_token=on_token, timeout=timeout):
         if chunk.startswith("data: [DONE]"):
             saw_done = True
             if search_sum:
@@ -631,22 +685,38 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
 @router.post("/chat/completions")
 async def chat_completions(req: ChatRequest):
     metrics["total_requests"] += 1
+
+    # Per-request overrides for programmatic / structured-output callers.
+    # None -> fall back to the server's CFG default; raw=True is a hard opt-out
+    # of the gateway's RAG/search/system-prompt behavior (clean passthrough).
+    use_search = CFG.search_enabled if req.search is None else req.search
+    use_memory = CFG.memory_enabled if req.memory is None else req.memory
+    inject_system = req.inject_system
+    if req.raw:
+        use_search = use_memory = inject_system = False
+    fmt = _ollama_format(req.response_format)
+
     raw_query = req.messages[-1].text() if req.messages else ""
     clean, command, _ = _parse_command(raw_query)
     if command:
         req.messages[-1] = Message(role="user", content=clean)
 
+    # Structured output and the search "two-pass" sentinel are incompatible
+    # (forced JSON can't emit the [SEARCH:…] marker), so disable two-pass when
+    # a response_format is requested.
     allow_two_pass = (
-        CFG.search_enabled and req.inject_system
+        use_search and inject_system
         and not req.stream and not command
+        and req.response_format is None
     )
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         clean, command, req.stream, allow_two_pass,
+        use_search=use_search, use_memory=use_memory,
     )
 
     messages = (
         _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
-        if req.inject_system else [m.model_dump() for m in req.messages]
+        if inject_system else [m.model_dump() for m in req.messages]
     )
 
     library_primary = command == "library"
@@ -677,7 +747,8 @@ async def chat_completions(req: ChatRequest):
 
     payload = oll.build_payload(final_messages, req.model,
                                 temperature=req.temperature, max_tokens=req.max_tokens,
-                                top_p=req.top_p, stop=req.stop, stream=req.stream)
+                                top_p=req.top_p, stop=req.stop, stream=req.stream,
+                                fmt=fmt)
     message_id = _new_message_id()
     if req.stream:
         async def gen():
@@ -689,7 +760,7 @@ async def chat_completions(req: ChatRequest):
             ):
                 yield chunk
             reply_text = "".join(buf)
-            if CFG.memory_enabled and req.inject_system and req.messages:
+            if use_memory and inject_system and req.messages:
                 asyncio.create_task(mem.store_conversation_turn(
                     conv_id=f"chat_{int(time.time())}",
                     conv_name=f"Chat ({req.system_prompt_key or 'default'})",
@@ -708,7 +779,7 @@ async def chat_completions(req: ChatRequest):
             data = await oll.chat(payload)
         reply = data.get("message", {}).get("content", "")
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
-        if CFG.memory_enabled and req.inject_system and req.messages:
+        if use_memory and inject_system and req.messages:
             asyncio.create_task(mem.store_conversation_turn(
                 conv_id=f"chat_{int(time.time())}",
                 conv_name=f"Chat ({req.system_prompt_key or 'default'})",
@@ -739,9 +810,17 @@ async def reasoning(req: ReasoningRequest):
     if command:
         req.messages[-1] = Message(role="user", content=clean)
 
-    allow_two_pass = CFG.search_enabled and not req.stream and not command
+    # Auto web-search defaults OFF for reasoning (unlike /chat/completions,
+    # where it defaults to CFG.search_enabled): injected results are the main
+    # budget sink for a thinking model. Explicit /search and /x commands still
+    # run — they bypass this flag inside _resolve_context.
+    use_search = CFG.search_enabled and req.search is True
+    # A per-request opt-in can never re-enable memory the server disabled.
+    use_memory = CFG.memory_enabled and (req.memory is None or req.memory)
+    allow_two_pass = use_search and not req.stream and not command
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         clean, command, req.stream, allow_two_pass,
+        use_search=use_search, use_memory=use_memory,
     )
 
     messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
@@ -765,8 +844,9 @@ async def reasoning(req: ReasoningRequest):
     )
 
     final_messages = _add_search_capability(messages) if two_pass else messages
+    reasoning_budget = max(req.max_tokens, CFG.reasoning_max_tokens)
     payload = oll.build_payload(final_messages, req.model,
-                                temperature=req.temperature, max_tokens=req.max_tokens,
+                                temperature=req.temperature, max_tokens=reasoning_budget,
                                 top_p=0.95, stream=req.stream, thinking=True)
     message_id = _new_message_id()
     if req.stream:
@@ -776,10 +856,13 @@ async def reasoning(req: ReasoningRequest):
                 payload, search_result=search_result, command=command,
                 message_id=message_id, intent_signals=intent_signals,
                 memory_chunks=chunks, on_token=buf.append,
+                timeout=CFG.reasoning_timeout_s,
             ):
                 yield chunk
             reply_text = "".join(buf)
-            if CFG.memory_enabled and req.messages:
+            # An empty reply (budget consumed by reasoning) must not be written
+            # back into RAG memory — it would poison later retrievals.
+            if use_memory and req.messages and reply_text.strip():
                 asyncio.create_task(mem.store_conversation_turn(
                     conv_id=f"reasoning_{int(time.time())}",
                     conv_name=f"Reasoning ({req.system_prompt_key})",
@@ -790,13 +873,22 @@ async def reasoning(req: ReasoningRequest):
     try:
         if two_pass:
             data, search_result = await _two_pass_chat(
-                final_messages, req.model, req.temperature, req.max_tokens, 0.95, None,
+                final_messages, req.model, req.temperature, reasoning_budget, 0.95, None,
+                thinking=True, timeout=CFG.reasoning_timeout_s,
             )
         else:
-            data = await oll.chat(payload)
-        reply = data.get("message", {}).get("content", "")
+            data = await oll.chat(payload, timeout=CFG.reasoning_timeout_s)
+        msg = data.get("message", {}) or {}
+        reply = msg.get("content", "") or ""
+        thinking = msg.get("thinking", "") or ""
+        truncated = data.get("done_reason") == "length"
+        if not reply.strip() and thinking.strip():
+            log.warning("reasoning: budget %d exhausted during thinking phase "
+                        "(eval=%s); returning reasoning text as the answer",
+                        reasoning_budget, data.get("eval_count"))
+            reply = thinking.strip()
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
-        if CFG.memory_enabled and req.messages:
+        if use_memory and req.messages and reply.strip():
             asyncio.create_task(mem.store_conversation_turn(
                 conv_id=f"reasoning_{int(time.time())}",
                 conv_name=f"Reasoning ({req.system_prompt_key})",
@@ -805,7 +897,8 @@ async def reasoning(req: ReasoningRequest):
             ))
         extra: dict = {"reasoning_mode": True,
                        "system_prompt_used": req.system_prompt_key,
-                       "message_id": message_id}
+                       "message_id": message_id,
+                       "reasoning_truncated": truncated}
         ws_summary = _search_summary(search_result, command, intent_signals)
         if ws_summary:
             extra["web_search"] = ws_summary
@@ -892,6 +985,7 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
     allow_two_pass = CFG.search_enabled and not req.stream and not command
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         clean, command, req.stream, allow_two_pass,
+        use_search=CFG.search_enabled, use_memory=CFG.memory_enabled,
     )
 
     library_primary = command == "library"
