@@ -297,8 +297,19 @@ async def _embed_one(text: str) -> list[float]:
         return await oll.embed(text)
 
 
+# A full book is ~700 chunks; unbounded gather fired every embedding request
+# at Ollama at once. Bounded, order-preserving.
+EMBED_CONCURRENCY = 8
+
+
 async def _embed_many(texts: list[str]) -> list[list[float]]:
-    return await asyncio.gather(*[_embed_one(t) for t in texts])
+    sem = asyncio.Semaphore(EMBED_CONCURRENCY)
+
+    async def one(t: str) -> list[float]:
+        async with sem:
+            return await _embed_one(t)
+
+    return await asyncio.gather(*[one(t) for t in texts])
 
 
 # ── Store ────────────────────────────────────────────────────────────────────
@@ -310,7 +321,8 @@ async def store_knowledge(text: str, *, title: str, source_type: str,
         return {"error": "memory not ready", "chunks_stored": 0}
 
     sid = _source_id(source_type, identifier)
-    chunks = _chunks(text)
+    # Postgres text columns reject NUL; some PDFs extract with them.
+    chunks = _chunks(text.replace("\x00", ""))
     if not chunks:
         return {"chunks_stored": 0, "skipped": "empty"}
 

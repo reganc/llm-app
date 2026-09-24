@@ -263,7 +263,8 @@ async def memory_ingest(
         extracted = await extract_file(file)
         if extracted["error"]:
             raise HTTPException(422, extracted["error"])
-        content = extracted["text"]
+        # Full text — `text` is capped for chat prompts (extract.truncate).
+        content = extracted.get("full_text") or extracted["text"]
         identifier = identifier or extracted["filename"]
     elif text.strip():
         content = text

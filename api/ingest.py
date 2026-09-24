@@ -22,6 +22,36 @@ log = logging.getLogger("llm-api.ingest")
 
 router = APIRouter(prefix="/v1/ingest", tags=["ingest"], dependencies=[Depends(verify_api_key)])
 
+# How long a route waits for memory storage before answering "storing".
+# Storage itself is never cancelled — a full book can take minutes to embed.
+MEMORY_STORE_WAIT_S = 30.0
+
+# Strong refs: asyncio only keeps weak references to tasks, so an
+# un-awaited create_task() can be garbage-collected mid-flight.
+_background: set[asyncio.Task] = set()
+
+
+def _store_document(extracted: dict, *, title: str, identifier: str) -> asyncio.Task:
+    """Store the *full* extracted text (not the prompt-capped `text`)."""
+    task = asyncio.create_task(mem.store_knowledge(
+        text=extracted.get("full_text") or extracted["text"], title=title,
+        source_type=extracted["source_type"], identifier=identifier,
+    ))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return task
+
+
+async def _await_store(task: asyncio.Task) -> dict:
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=MEMORY_STORE_WAIT_S)
+    except asyncio.TimeoutError:
+        return {"status": "storing",
+                "detail": "large document — still embedding in the background"}
+    except Exception as e:
+        log.warning("memory store failed: %s", e)
+        return {"error": f"memory store failed: {e}"}
+
 
 def _build_messages(extracted: dict, question: str, system_key: str | None) -> list[dict]:
     source_label = extracted.get("url") or extracted.get("filename") or "document"
@@ -66,10 +96,8 @@ async def ingest_url_route(req: UrlIngestRequest):
 
     mem_task = None
     if CFG.memory_enabled and extracted.get("text"):
-        mem_task = asyncio.create_task(mem.store_knowledge(
-            text=extracted["text"], title=extracted["title"] or req.url,
-            source_type=extracted["source_type"], identifier=req.url,
-        ))
+        mem_task = _store_document(extracted, title=extracted["title"] or req.url,
+                                   identifier=req.url)
 
     messages = _build_messages(extracted, req.question, req.system_prompt_key)
     payload = oll.build_payload(messages, req.model,
@@ -78,12 +106,7 @@ async def ingest_url_route(req: UrlIngestRequest):
     data = await oll.chat(payload)
     reply = data.get("message", {}).get("content", "")
 
-    mem_result = None
-    if mem_task:
-        try:
-            mem_result = await asyncio.wait_for(mem_task, timeout=30.0)
-        except Exception:
-            mem_result = {"error": "memory store timeout"}
+    mem_result = await _await_store(mem_task) if mem_task else None
 
     return {
         "answer": reply,
@@ -135,10 +158,7 @@ async def ingest_url_to_conversation(req: UrlConvRequest):
                               f"TITLE: {title}\n\n{extracted['text']}{note}")
     conv_store.append_message(conv["id"], "assistant", body)
     if CFG.memory_enabled:
-        asyncio.create_task(mem.store_knowledge(
-            text=extracted["text"], title=title,
-            source_type=extracted["source_type"], identifier=req.url,
-        ))
+        _store_document(extracted, title=title, identifier=req.url)
     return {"conversation_id": conv["id"], "name": name,
             "source": conv.get("source")}
 
@@ -203,19 +223,12 @@ async def ingest_document_route(
 
     mem_task = None
     if CFG.memory_enabled:
-        mem_task = asyncio.create_task(mem.store_knowledge(
-            text=extracted["text"], title=extracted["filename"],
-            source_type=extracted["source_type"], identifier=extracted["filename"],
-        ))
+        mem_task = _store_document(extracted, title=extracted["filename"],
+                                   identifier=extracted["filename"])
 
     data = await oll.chat(payload)
     reply = data.get("message", {}).get("content", "")
-    mem_result = None
-    if mem_task:
-        try:
-            mem_result = await asyncio.wait_for(mem_task, timeout=30.0)
-        except Exception:
-            mem_result = {"error": "memory store timeout"}
+    mem_result = await _await_store(mem_task) if mem_task else None
 
     return {
         "answer": reply,
@@ -267,11 +280,9 @@ async def ingest_document_to_conversation(
     conv_store.append_message(
         conv["id"], "assistant",
         f"Document loaded: {filename} ({extracted['char_count']:,} chars"
-        f"{', truncated' if extracted['truncated'] else ''}). Ready for questions.",
+        f"{'; this chat sees the first part, the full text is in your library' if extracted['truncated'] else ''}"
+        f"). Ready for questions.",
     )
     if CFG.memory_enabled:
-        asyncio.create_task(mem.store_knowledge(
-            text=extracted["text"], title=filename,
-            source_type=extracted["source_type"], identifier=filename,
-        ))
+        _store_document(extracted, title=filename, identifier=filename)
     return {"conversation_id": conv["id"], "name": name, "source": conv.get("source")}

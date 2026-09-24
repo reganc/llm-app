@@ -25,7 +25,7 @@ from urllib.parse import urldefrag, urljoin, urlparse
 import httpx
 
 from config import CFG
-from extract import _HEADERS, _trafilatura, truncate
+from extract import _HEADERS, _trafilatura
 
 log = logging.getLogger("llm-api.crawler")
 
@@ -404,7 +404,9 @@ async def _local_crawl(seed_url: str, max_pages: int, max_depth: int,
 
             extracted = await _trafilatura(url)
             if extracted and not extracted.get("error") and extracted.get("text"):
-                text, _ = truncate(extracted["text"])
+                # Full page text: pages go to memory, which chunks them. The
+                # 12k prompt cap (extract.truncate) used to drop long pages' tails.
+                text = extracted["text"]
                 pages.append(CrawlPage(
                     url=extracted.get("url") or url,
                     title=extracted.get("title") or url,

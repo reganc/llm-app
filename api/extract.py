@@ -31,6 +31,8 @@ _HEADERS = {
 
 
 def truncate(text: str, limit: int | None = None) -> tuple[str, bool]:
+    """Cap text for a single chat prompt. Extractors keep the uncut text as
+    `full_text` — memory must store that, not this."""
     limit = limit or CFG.context_char_limit
     if len(text) <= limit:
         return text, False
@@ -110,6 +112,7 @@ async def extract_url(url: str) -> dict:
             base["source_type"] = "youtube_transcript"
             base["title"] = f"YouTube video {video_id}"
             base["text"], base["truncated"] = truncate(raw)
+            base["full_text"] = raw
             base["char_count"] = len(raw)
             return base
         except Exception as e:
@@ -127,6 +130,7 @@ async def extract_url(url: str) -> dict:
 
     base["title"] = result["title"]
     base["text"], base["truncated"] = truncate(result["text"])
+    base["full_text"] = result["text"]
     base["char_count"] = result["char_count"]
     base["source_type"] = result["source_type"]
     return base
@@ -161,6 +165,7 @@ async def extract_file(file: UploadFile) -> dict:
             base["error"] = f"Unsupported file type: {ext}. Try txt/md/csv/pdf/docx/rtf"
             return base
         base["text"], base["truncated"] = truncate(text)
+        base["full_text"] = text
         base["char_count"] = len(text)
     except Exception as e:
         base["error"] = f"Failed to extract file: {e}"
