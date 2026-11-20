@@ -21,8 +21,7 @@ import search
 import x_search
 from auth import verify_api_key
 from config import CFG, get_active_model
-from extract import truncate as truncate_text
-from prompts import SEARCH_ADDENDUM, build_system, get_system_prompt
+from prompts import SEARCH_ADDENDUM, build_system
 from prompts import search_block_prompt as _search_block_prompt
 
 log = logging.getLogger("llm-api.chat")
