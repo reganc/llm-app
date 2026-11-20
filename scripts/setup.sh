@@ -92,8 +92,8 @@ for i in $(seq 1 30); do
 done
 
 # ── 10. Pull model ────────────────────────────────────────────
-MODEL_TO_PULL="${DEFAULT_MODEL:-huihui_ai/qwen2.5-abliterate:14b}"
-info "Pulling ${MODEL_TO_PULL} (~9 GB download)..."
+MODEL_TO_PULL="${DEFAULT_MODEL:-huihui_ai/qwen3.5-abliterated:9b}"
+info "Pulling ${MODEL_TO_PULL} (~6.6 GB download)..."
 docker exec ollama ollama pull "${MODEL_TO_PULL}"
 success "Model downloaded and ready!"
 

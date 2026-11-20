@@ -1,6 +1,6 @@
 # 🤖 Local LLM Stack — RTX 3060
 
-**Qwen2.5 14B Abliterated · Ollama · Postgres+pgvector · FastAPI + SPA**
+**Qwen3.5 9B Abliterated · Ollama · Postgres+pgvector · FastAPI + SPA**
 
 Full local AI stack optimized for the RTX 3060 (12GB VRAM).
 No cloud. No API costs. Downstream apps reference one stable alias
@@ -32,8 +32,8 @@ No cloud. No API costs. Downstream apps reference one stable alias
 │         └────────┬─────────┘                           │
 │                  │                                      │
 │         ┌────────▼─────────┐                           │
-│         │ Qwen2.5 14B      │  ← Q4_K_M GGUF            │
-│         │ abliterated      │    ~9 GB VRAM             │
+│         │ Qwen3.5 9B       │  ← Q4_K_M GGUF            │
+│         │ abliterated      │    ~7.6 GB VRAM @ 64K     │
 │         └──────────────────┘                           │
 │                  │                                      │
 │         ┌────────▼─────────┐                           │
@@ -53,8 +53,9 @@ context into a typical request.
 | Model                                | Weights | 32K ctx        | Notes |
 |:-------------------------------------|:--------|:---------------|:------|
 | **huihui_ai/qwen3.5-abliterated:9b** | 6.6 GB  | 100% GPU, ~57 t/s | ✅ **Active default.** 64K fits fully on GPU (7.6 GB). 256K ceiling, native tools, vision |
-| qwen3.5:9b                           | 6.6 GB  | 100% GPU, ~57 t/s | Vanilla (non-abliterated) drop-in, Apache 2.0 |
-| huihui_ai/qwen2.5-abliterate:14b     | 9.0 GB  | 56% GPU, ~5 t/s   | Previous default. Spills even at 8K (94% GPU, ~20 t/s) |
+| qwen3.5:9b                           | 6.6 GB  | 100% GPU, ~57 t/s | Vanilla (non-abliterated) drop-in, Apache 2.0. Not installed |
+| huihui_ai/qwen2.5-abliterate:14b     | 9.0 GB  | 56% GPU, ~5 t/s   | Previous default. Spills even at 8K (94% GPU, ~20 t/s). Removed 2026-11-20 |
+| huihui_ai/gemma-4-abliterated:12b    | 7.6 GB  | —                 | A/B'd 2026-11-20 on `evals/`: 24/29 vs 25/29 for the default. Faster (p95 17.8s vs 27.8s) but gave wrong facts on every follow-up case without searching. Rejected |
 | qwen3.6:27b                          | 17 GB   | — | Dense; cannot fit — would spill like the 14B |
 
 Qwen3.5 is a **thinking** model: reasoning tokens are emitted before any
@@ -85,7 +86,7 @@ This will:
 - Install Docker + Docker Compose
 - Install NVIDIA Container Toolkit (GPU passthrough)
 - Pull all Docker images
-- Download the active model (~9 GB for Qwen2.5 14B)
+- Download the active model (~6.6 GB for Qwen3.5 9B)
 - Start all services
 
 ### 2. Access
@@ -236,10 +237,10 @@ environment:
 Switch to a smaller quant or a smaller model, then activate it via
 `/v1/settings`:
 ```bash
-docker exec ollama ollama pull huihui_ai/qwen2.5-abliterate:7b   # ~5 GB VRAM
+docker exec ollama ollama pull huihui_ai/qwen3.5-abliterated:4B   # 3.3 GB weights
 curl -X PATCH http://localhost:8030/v1/settings \
   -H "Authorization: Bearer $API_KEY" \
-  -d '{"default_model":"huihui_ai/qwen2.5-abliterate:7b"}'
+  -d '{"default_model":"huihui_ai/qwen3.5-abliterated:4B"}'
 ```
 
 ---
@@ -254,7 +255,7 @@ sudo systemctl restart docker
 
 **Model download fails:**
 ```bash
-docker exec -it ollama ollama pull huihui_ai/qwen2.5-abliterate:14b
+docker exec -it ollama ollama pull huihui_ai/qwen3.5-abliterated:9b
 ```
 
 **Port already in use:**

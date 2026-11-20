@@ -18,7 +18,7 @@ pulls models on startup. Open WebUI was removed — the SPA is the only UI.
 ## Key Notes
 
 - **Open in browser**: `http://localhost:8030`
-- **Primary model**: `huihui_ai/qwen2.5-abliterate:14b` (~9 GB VRAM at Q4_K_M) — pulled automatically on first start
+- **Primary model**: `huihui_ai/qwen3.5-abliterated:9b` (6.6 GB weights at Q4_K_M, ~7.6 GB VRAM at 64K ctx) — pulled automatically on first start. A thinking model: see the `think: false` notes below
 - **Model alias contract**: downstream apps should request `model: "default"` — `normalize_model()` resolves it to the active model server-side, so swaps via `/v1/settings` or `DEFAULT_MODEL` env need no client edits
 - **Embed model**: `nomic-embed-text` — pulled automatically when `MEMORY_ENABLED=true`
 - **API auth**: Bearer token via `API_KEY`; the SPA prompts for it on first visit and stores in localStorage
@@ -235,7 +235,7 @@ flag False and are unchanged.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Inference backend |
-| `DEFAULT_MODEL` | `huihui_ai/qwen2.5-abliterate:14b` | Active model; resolves the `"default"` alias requests |
+| `DEFAULT_MODEL` | `huihui_ai/qwen3.5-abliterated:9b` | Active model; resolves the `"default"` alias requests |
 | `EMBED_MODEL` | `nomic-embed-text` | Vector embeddings |
 | `API_KEY` | `change-me-in-production` | Bearer auth token |
 | `MEMORY_ENABLED` | `true` | Enable Postgres+pgvector RAG |
