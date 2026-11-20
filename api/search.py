@@ -257,28 +257,41 @@ def remove_aux_site(url: str) -> bool:
 
 
 # ── SearXNG / DDG ────────────────────────────────────────────────────────────
+async def _searxng_query(client: httpx.AsyncClient, query: str,
+                         engines: str, num: int) -> list[dict]:
+    r = await client.get(
+        f"{CFG.searxng_url}/search",
+        params={"q": query, "format": "json", "engines": engines, "lang": "en"},
+    )
+    r.raise_for_status()
+    body = r.json()
+    # SearXNG degrades silently: a blocked engine just contributes
+    # nothing. Surface it, or the only symptom is worse answers.
+    if dead := body.get("unresponsive_engines"):
+        log.warning("searxng unresponsive engines: %s",
+                    ", ".join(f"{e} ({why})" for e, why in dead))
+    results = body.get("results", [])[:num]
+    return [
+        {"title": x.get("title", ""), "url": x.get("url", ""),
+         "snippet": x.get("content", ""),
+         "engine": x.get("engine", "searxng")}
+        for x in results if x.get("url")
+    ]
+
+
 async def searxng_search(query: str, num: int) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=10.0, headers=_SEARXNG_HEADERS) as client:
-            r = await client.get(
-                f"{CFG.searxng_url}/search",
-                params={"q": query, "format": "json",
-                        "engines": CFG.searxng_engines, "lang": "en"},
-            )
-            r.raise_for_status()
-            body = r.json()
-            # SearXNG degrades silently: a blocked engine just contributes
-            # nothing. Surface it, or the only symptom is worse answers.
-            if dead := body.get("unresponsive_engines"):
-                log.warning("searxng unresponsive engines: %s",
-                            ", ".join(f"{e} ({why})" for e, why in dead))
-            results = body.get("results", [])[:num]
-            return [
-                {"title": x.get("title", ""), "url": x.get("url", ""),
-                 "snippet": x.get("content", ""),
-                 "engine": x.get("engine", "searxng")}
-                for x in results if x.get("url")
-            ]
+            out = await _searxng_query(client, query, CFG.searxng_engines, num)
+            # Fallback engines are only asked when the primary set is empty:
+            # mixed in, Bing outranks better engines with off-topic hits
+            # ("prime minister" -> Prime Video).
+            if not out and CFG.searxng_fallback_engines:
+                log.warning("searxng: no results from %s — trying fallback %s",
+                            CFG.searxng_engines, CFG.searxng_fallback_engines)
+                out = await _searxng_query(client, query,
+                                           CFG.searxng_fallback_engines, num)
+            return out
     except Exception as e:
         log.warning("searxng failed: %s — falling back to DDG", e)
         return await _ddg(query, num)

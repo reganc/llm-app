@@ -5,6 +5,11 @@ suspended, DuckDuckGo/Startpage/Qwant CAPTCHA, Brave rate-limited). SearXNG
 reported it in `unresponsive_engines`, but the gateway ignored the field, so
 the only symptom was bad answers from thin Bing results. The engine list
 was also hard-coded, keeping a CAPTCHA-blocked engine in and a working one out.
+
+On 2026-11-20 it had flipped: Google suspended, Brave rate-limited, so Bing
+alone answered "Who is the prime minister of the UK?" with Prime Video and
+amazon.com. Bing outranks better engines even when mixed in, so it moved to a
+fallback list that is only asked when the primary engines return nothing.
 """
 from __future__ import annotations
 
@@ -27,8 +32,10 @@ class _Resp:
 
 
 class _Client:
-    def __init__(self, sent: list[dict], body: dict):
-        self._sent, self._body = sent, body
+    """Answers each request with the next body; the last one repeats."""
+
+    def __init__(self, sent: list[dict], bodies: list[dict]):
+        self._sent, self._bodies = sent, bodies
 
     async def __aenter__(self):
         return self
@@ -38,12 +45,13 @@ class _Client:
 
     async def get(self, _url, params=None, **_kw):
         self._sent.append(params)
-        return _Resp(self._body)
+        return _Resp(self._bodies[min(len(self._sent), len(self._bodies)) - 1])
 
 
-def _patch(monkeypatch, body: dict, **cfg) -> list[dict]:
+def _patch(monkeypatch, *bodies: dict, **cfg) -> list[dict]:
     sent: list[dict] = []
-    monkeypatch.setattr(search.httpx, "AsyncClient", lambda **_kw: _Client(sent, body))
+    monkeypatch.setattr(search.httpx, "AsyncClient",
+                        lambda **_kw: _Client(sent, list(bodies)))
     if cfg:
         monkeypatch.setattr(search, "CFG", dataclasses.replace(search.CFG, **cfg))
     return sent
@@ -52,10 +60,12 @@ def _patch(monkeypatch, body: dict, **cfg) -> list[dict]:
 RESULTS = {"results": [{"title": "Sam Altman - Wikipedia", "url": "https://w/a",
                         "content": "CEO of OpenAI", "engine": "google"}],
            "unresponsive_engines": []}
+EMPTY = {"results": [], "unresponsive_engines": [["google cse", "CAPTCHA"]]}
 
 
-def test_default_engines_skip_captcha_blocked_duckduckgo():
-    assert search.CFG.searxng_engines == "google,brave,bing"
+def test_default_engines_leave_bing_to_the_fallback():
+    assert search.CFG.searxng_engines == "google cse,duckduckgo"
+    assert search.CFG.searxng_fallback_engines == "bing,google,brave"
 
 
 def test_engines_come_from_config(monkeypatch):
@@ -80,3 +90,32 @@ def test_healthy_response_logs_nothing(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="llm-api.search"):
         asyncio.run(search.searxng_search("q", 5))
     assert not caplog.records
+
+
+def test_results_from_primary_engines_skip_the_fallback(monkeypatch):
+    sent = _patch(monkeypatch, RESULTS)
+    asyncio.run(search.searxng_search("q", 5))
+    assert [p["engines"] for p in sent] == [search.CFG.searxng_engines]
+
+
+def test_empty_primary_retries_with_fallback_engines(monkeypatch):
+    sent = _patch(monkeypatch, EMPTY, RESULTS,
+                  searxng_engines="google cse", searxng_fallback_engines="bing")
+    out = asyncio.run(search.searxng_search("UK prime minister", 5))
+    assert [p["engines"] for p in sent] == ["google cse", "bing"]
+    assert sent[1]["q"] == "UK prime minister"
+    assert out[0]["title"] == "Sam Altman - Wikipedia"
+
+
+def test_empty_fallback_setting_disables_the_retry(monkeypatch):
+    sent = _patch(monkeypatch, EMPTY, RESULTS, searxng_fallback_engines="")
+    assert asyncio.run(search.searxng_search("q", 5)) == []
+    assert len(sent) == 1
+
+
+def test_fallback_use_is_logged(monkeypatch, caplog):
+    _patch(monkeypatch, EMPTY, RESULTS, searxng_fallback_engines="bing")
+    with caplog.at_level(logging.WARNING, logger="llm-api.search"):
+        asyncio.run(search.searxng_search("q", 5))
+    assert any("fallback" in r.getMessage() and "bing" in r.getMessage()
+               for r in caplog.records)

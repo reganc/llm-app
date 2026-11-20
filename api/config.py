@@ -49,6 +49,7 @@ class Config:
     search_always: bool
     searxng_url: str
     searxng_engines: str
+    searxng_fallback_engines: str
     auto_search_threshold: float
     search_results: int
     search_fetch_timeout: int
@@ -100,9 +101,13 @@ CFG = Config(
     search_enabled=os.getenv("SEARCH_ENABLED", "true").lower() == "true",
     search_always=os.getenv("SEARCH_ALWAYS", "false").lower() == "true",
     searxng_url=os.getenv("SEARXNG_URL", "http://searxng:8080").rstrip("/"),
-    # Engines asked per query. DuckDuckGo/Qwant/Startpage CAPTCHA-block this
-    # host's IP; watch the "searxng unresponsive engines" log to re-tune.
-    searxng_engines=os.getenv("SEARXNG_ENGINES", "google,brave,bing"),
+    # Engines asked per query. Which ones this host's IP can reach drifts
+    # (Google/Brave suspended, DuckDuckGo intermittently CAPTCHAs as of
+    # 2026-11-20); watch the "searxng unresponsive engines" log to re-tune.
+    searxng_engines=os.getenv("SEARXNG_ENGINES", "google cse,duckduckgo"),
+    # Asked only when SEARXNG_ENGINES returns nothing. Bing lives here because
+    # it outranks better engines with off-topic hits. Empty disables.
+    searxng_fallback_engines=os.getenv("SEARXNG_FALLBACK_ENGINES", "bing,google,brave"),
     auto_search_threshold=float(os.getenv("AUTO_SEARCH_THRESHOLD", "0.35")),
     search_results=int(os.getenv("SEARCH_RESULTS", "5")),
     search_fetch_timeout=int(os.getenv("SEARCH_FETCH_TIMEOUT", "15")),
