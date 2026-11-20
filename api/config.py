@@ -152,8 +152,11 @@ def set_setting(key: str, value) -> None:
 
 
 def get_active_model() -> str:
-    """Currently selected default model (settings overrides env)."""
-    return get_setting("default_model", CFG.default_model)
+    """Currently selected default model (settings overrides env).
+
+    A blank stored value falls back to DEFAULT_MODEL: resolving "default" to
+    "" makes every Ollama call a 400, which took the gateway down once."""
+    return (get_setting("default_model") or "").strip() or CFG.default_model
 
 
 def get_default_system_prompt_key() -> str:

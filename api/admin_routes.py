@@ -54,16 +54,37 @@ async def get_settings():
     }
 
 
+async def _validated_model(name: str) -> str:
+    """The model to store, or HTTPException. Must be non-blank and installed:
+    the active model is every app's `default`, so a bad value breaks them all."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "default_model must not be empty")
+    try:
+        installed = {m["name"] for m in await oll.list_models()}
+    except Exception as e:
+        raise HTTPException(503, f"Cannot verify model, Ollama unreachable: {e}")
+    if name not in installed and f"{name}:latest" not in installed:
+        raise HTTPException(400, f"Model {name!r} is not installed in Ollama")
+    return name
+
+
 @router.patch("/settings")
 async def patch_settings(body: SettingsPatch):
-    if body.default_model is not None:
-        set_setting("default_model", body.default_model)
+    # Validate every field before writing any: a rejected field must not leave
+    # an earlier one half-applied.
+    model = (await _validated_model(body.default_model)
+             if body.default_model is not None else None)
+    if (body.default_system_prompt_key is not None
+            and body.default_system_prompt_key not in SYSTEM_PROMPTS):
+        raise HTTPException(400, "Unknown system_prompt_key")
+
+    if model is not None:
+        set_setting("default_model", model)
         # Refresh the Ollama-side "default" alias so direct Ollama clients
         # picking up model="default" hit the new model on the next request.
-        await oll.copy_model(body.default_model, "default")
+        await oll.copy_model(model, "default")
     if body.default_system_prompt_key is not None:
-        if body.default_system_prompt_key not in SYSTEM_PROMPTS:
-            raise HTTPException(400, "Unknown system_prompt_key")
         set_setting("default_system_prompt_key", body.default_system_prompt_key)
     if body.search_always is not None:
         set_setting("search_always", body.search_always)
