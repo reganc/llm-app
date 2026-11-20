@@ -13,7 +13,7 @@ import search
 import x_search
 from auth import verify_api_key
 from config import (CFG, get_active_model, get_default_system_prompt_key,
-                    set_setting)
+                    get_search_always, set_setting)
 from extract import extract_file
 from prompts import PROMPT_DESCRIPTIONS, SYSTEM_PROMPTS, get_system_prompt
 
@@ -48,6 +48,7 @@ async def get_settings():
         "default_model": get_active_model(),
         "env_default_model": CFG.default_model,
         "default_system_prompt_key": get_default_system_prompt_key(),
+        "search_always": get_search_always(),
         "search_enabled": CFG.search_enabled,
         "memory_enabled": CFG.memory_enabled,
         "x_search": x_search.status(),

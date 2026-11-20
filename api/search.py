@@ -13,7 +13,7 @@ import httpx
 
 import memory as mem
 import ollama as oll
-from config import CFG, AUX_SITES_FILE
+from config import CFG, AUX_SITES_FILE, get_search_always
 from extract import _firecrawl, _trafilatura
 
 log = logging.getLogger("llm-api.search")
@@ -625,7 +625,7 @@ async def _probe_hedging(query: str) -> bool:
 async def should_auto_search(memory_chunks: list[dict], query: str = "") -> bool:
     if not CFG.search_enabled:
         return False
-    if CFG.search_always:
+    if get_search_always():
         return True
     if not query:
         return not memory_chunks

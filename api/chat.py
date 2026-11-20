@@ -20,7 +20,7 @@ import rewrite
 import search
 import x_search
 from auth import verify_api_key
-from config import CFG, get_active_model
+from config import CFG, get_active_model, get_search_always
 from prompts import SEARCH_ADDENDUM, build_system
 from prompts import search_block_prompt as _search_block_prompt
 
@@ -731,6 +731,9 @@ async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, 
         intent = search.detect_intent(retrieval_query)
         if intent.get("force_search"):
             intent_signals = intent.get("signals", []) or []
+        elif get_search_always():
+            intent_signals = ["search_always"]
+        if intent.get("force_search") or get_search_always():
             search_block = await agent.prefetch_web(retrieval_query, trace,
                                                     store=req.store)
     messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)

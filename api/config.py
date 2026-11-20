@@ -159,5 +159,10 @@ def get_active_model() -> str:
     return (get_setting("default_model") or "").strip() or CFG.default_model
 
 
+def get_search_always() -> bool:
+    """"Always search the web": the SPA setting overrides SEARCH_ALWAYS."""
+    return bool(get_setting("search_always", CFG.search_always))
+
+
 def get_default_system_prompt_key() -> str:
     return get_setting("default_system_prompt_key", os.getenv("DEFAULT_SYSTEM_PROMPT", "default"))

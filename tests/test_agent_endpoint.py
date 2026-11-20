@@ -283,6 +283,21 @@ def test_no_intent_no_pre_search(client, env):
     assert env.searches == []
 
 
+def test_search_always_setting_pre_searches_every_question(client, env, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "_settings", {"search_always": True})
+    body = ask(client, question="who wrote moby dick?", agent=True).json()
+    assert env.searches == [("who wrote moby dick?", True)]
+    assert body["web_search"]["intent_signals"] == ["search_always"]
+
+
+def test_search_always_respects_request_search_off(client, env, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "_settings", {"search_always": True})
+    ask(client, question="who wrote moby dick?", agent=True, search=False)
+    assert env.searches == []
+
+
 # ── fix: agent pre-fetch keeps only user-saved sources ───────────────────────
 
 def test_prefetch_drops_search_ingests_and_conversation_turns(client, env):

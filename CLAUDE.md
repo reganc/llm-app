@@ -257,7 +257,7 @@ flag False and are unchanged.
 | `DISTILL_AT` | `03:00` | Daily wall-clock time for distill when window mode is disabled |
 | `DISTILL_TIMEZONE` | `America/Chicago` | IANA TZ used by the distill schedule |
 | `SEARCH_ENABLED` | `true` | Enable SearXNG web search |
-| `SEARCH_ALWAYS` | `false` | Force search on every query (vs. auto-decision) |
+| `SEARCH_ALWAYS` | `false` | Force search on every query (vs. auto-decision). Default only: the SPA's "Always search the web" setting (`search_always` in settings.json) overrides it. Agent mode runs the search before the first model call |
 | `SEARXNG_ENGINES` | `google cse,duckduckgo` | SearXNG engines asked per query. Reachability drifts per IP — watch the `searxng unresponsive engines` log |
 | `SEARXNG_FALLBACK_ENGINES` | `bing,google,brave` | Asked only when the primary engines return nothing (Bing outranks better engines with off-topic hits when mixed in). Empty disables |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli |
