@@ -552,6 +552,14 @@ async def feedback_stats() -> dict:
 _MD_LINK_RE = re.compile(r"\[[^\]\n]{0,200}\]\([^)\s]+\)")
 _PARA_SPLIT_RE = re.compile(r"\n{2,}")
 _WS_RE = re.compile(r"\s+")
+# Citation groups left in stored text — saved assistant answers keep theirs
+# ("[W3][L2]", "[W1, X2]"). They point at another turn's sources; rendered into
+# a prompt the model copies them, and agent.Trace.renumber counts them as shown.
+_STALE_CITE_RE = re.compile(r"\s*\[\s*[WXAL]\d+(?:\s*[,;]\s*[WXAL]\d+)*\s*\]")
+
+
+def _strip_stale_citations(text: str) -> str:
+    return _STALE_CITE_RE.sub("", text)
 _DEDUPE_MIN_LEN = 30
 
 _TOKEN_RE = re.compile(r"[a-z][a-z0-9'\-]+")
@@ -819,11 +827,29 @@ async def _hybrid_candidate_rows(query_text: str, q_emb: list[float],
     return out
 
 
+# saved_only drops most candidates (chat turns, search snapshots), so it ranks
+# a wider pool first. On the Kybalion eval the saved note was #7, the PDF #11.
+_SAVED_ONLY_POOL = 8
+
+
+def rank_chunks(chunks: list[dict], top_k: int, *,
+                saved_only: bool = False) -> list[dict]:
+    """Best `top_k` by score; with `saved_only`, filter to user-saved first."""
+    if saved_only:
+        chunks = [c for c in chunks if is_user_saved(c)]
+    return sorted(chunks, key=lambda x: x["score"], reverse=True)[:top_k]
+
+
 async def retrieve(query: str, *, top_k: int | None = None,
-                   include_conversations: bool = True) -> list[dict]:
+                   include_conversations: bool = True,
+                   saved_only: bool = False) -> list[dict]:
+    """Top chunks for `query`. `saved_only` keeps user-saved sources only and
+    applies that filter before the top-k cut, not after."""
     if not CFG.memory_enabled or not query.strip() or not is_available():
         return []
     top_k = top_k or CFG.memory_top_k
+    pool_k = top_k * _SAVED_ONLY_POOL if saved_only else top_k
+    include_conversations = include_conversations and not saved_only
     try:
         q_emb = await _embed_one(query)
     except Exception:
@@ -832,7 +858,7 @@ async def retrieve(query: str, *, top_k: int | None = None,
     out: list[dict] = []
     try:
         # Knowledge: hybrid (vector + BM25 via RRF).
-        rows = await _hybrid_candidate_rows(query, q_emb, top_k)
+        rows = await _hybrid_candidate_rows(query, q_emb, pool_k)
         for sid, stype, title, ident, ts, _, _, text, score, in_v, in_b in rows:
             out.append({
                 "text": text or "",
@@ -877,8 +903,7 @@ async def retrieve(query: str, *, top_k: int | None = None,
         log.warning("retrieve failed: %s", e)
         return []
 
-    out.sort(key=lambda x: x["score"], reverse=True)
-    return out[:top_k]
+    return rank_chunks(out, top_k, saved_only=saved_only)
 
 
 async def retrieve_deep(query: str, *, top_sources: int = 6,
@@ -1232,7 +1257,8 @@ def build_context_block(chunks: list[dict], *, max_chars: int = 3000,
     total = 0
     seen: set[str] = set()
     for i, c in enumerate(chunks, 1):
-        text = _dedupe_paragraphs(c.get("text", "") or "", seen=seen)
+        text = _strip_stale_citations(
+            _dedupe_paragraphs(c.get("text", "") or "", seen=seen))
         if not text.strip() and not (c.get("summary") or c.get("tags")):
             continue
         marker = f"[{cite_prefix}{i}]"
@@ -1249,12 +1275,13 @@ def build_context_block(chunks: list[dict], *, max_chars: int = 3000,
         preamble_bits: list[str] = []
         summary = c.get("summary") or {}
         if isinstance(summary, dict):
-            tl_dr = (summary.get("tl_dr") or "").strip()
+            tl_dr = _strip_stale_citations(summary.get("tl_dr") or "").strip()
             if tl_dr:
                 preamble_bits.append(f"GIST: {tl_dr}")
             claims = summary.get("key_claims") or []
             if isinstance(claims, list) and claims:
-                claim_lines = "\n".join(f"  - {str(k).strip()}" for k in claims[:6])
+                claim_lines = "\n".join(f"  - {_strip_stale_citations(str(k)).strip()}"
+                                        for k in claims[:6])
                 preamble_bits.append(f"KEY CLAIMS:\n{claim_lines}")
         tags = c.get("tags") or {}
         if isinstance(tags, dict):

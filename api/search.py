@@ -502,6 +502,18 @@ _CURRENT_ROLE_RE = re.compile(
     r"|\bwho\s+(?:currently\s+)?(?:runs|leads|heads|owns|chairs|manages|coaches|governs)\b",
     re.IGNORECASE,
 )
+# "Is Sam Altman still running OpenAI?" — same question about a named holder.
+# Case-sensitive on purpose: the subject (and a verb's object) must be
+# capitalised, so "Is my server still running?" / "...running on port 8080"
+# don't match. Past tense ("Was ... still") never matches.
+_STILL_ROLE_RE = re.compile(
+    r"\b(?i:is|are|does|do)\s+(?:[A-Z][\w.'’&-]*\s+){1,4}(?i:still)\s+(?:"
+    r"(?i:run|runs|running|lead|leads|leading|head|heads|heading|own|owns|owning|"
+    r"chair|chairs|chairing|manage|manages|managing|coach|coaches|coaching|"
+    r"govern|governs|governing)\s+(?:(?i:the)\s+)?[A-Z]"
+    r"|(?i:in\s+(?:charge|office|power)\b)"
+    r"|(?i:(?:the\s+)?(?:[\w.-]+\s+){0,2}?" + _ROLE + r"\b))"
+)
 
 
 def detect_intent(query: str) -> dict:
@@ -517,9 +529,10 @@ def detect_intent(query: str) -> dict:
     for m in _FORCE_X_RE.finditer(query):
         signals.append(m.group(0).lower())
         force_x = True
-    for m in _CURRENT_ROLE_RE.finditer(query):
-        signals.append("role:" + " ".join(m.group(0).lower().split()))
-        force_search = True
+    for rx in (_CURRENT_ROLE_RE, _STILL_ROLE_RE):
+        for m in rx.finditer(query):
+            signals.append("role:" + " ".join(m.group(0).lower().split()))
+            force_search = True
     if force_x:
         force_search = True  # X queries always need a fresh fetch
     # Dedupe while preserving order

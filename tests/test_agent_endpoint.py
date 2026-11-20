@@ -36,6 +36,7 @@ class Env:
         self.router_calls = 0
         self.stored: list[dict] = []
         self.memory: list[dict] = []
+        self.retrieve_kwargs: list[dict] = []
 
 
 @pytest.fixture
@@ -76,7 +77,8 @@ def env(monkeypatch) -> Env:
         e.router_calls += 1
         return False
 
-    async def fake_retrieve(*_a, **_kw):
+    async def fake_retrieve(*_a, **kw):
+        e.retrieve_kwargs.append(kw)
         return list(e.memory)
 
     async def no_titles(*_a, **_kw):
@@ -140,6 +142,18 @@ def test_agent_true_skips_router_and_offers_tools(client, env):
     assert body["agent"] == {"rounds": 1, "tool_calls": []}
     system = env.chat_payloads[0]["messages"][0]
     assert system["role"] == "system" and "library_search" in system["content"]
+
+
+def test_agent_prefetch_ranks_saved_sources_only(client, env):
+    # Pre-fetch keeps only user-saved sources; filtering after the top-k cut
+    # let chat turns and search snapshots crowd the saved PDF out entirely.
+    ask(client, agent=True)
+    assert env.retrieve_kwargs[0].get("saved_only") is True
+
+
+def test_legacy_path_still_recalls_everything(client, env):
+    ask(client)
+    assert not env.retrieve_kwargs[0].get("saved_only")
 
 
 def test_server_flag_enables_and_request_can_opt_out(client, env, monkeypatch):

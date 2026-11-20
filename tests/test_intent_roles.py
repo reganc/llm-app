@@ -6,6 +6,10 @@ description says to search for "who currently holds a role". Who holds an
 office is exactly the kind of fact that goes stale, so present-tense
 role-holder questions are routed deterministically. Past tense and
 historical phrasing ("who was the first president") must not match.
+
+"Is Sam Altman still running OpenAI?" asks the same thing about a named
+person, and the model answered it from a stale library page. The "still" form
+needs a capitalised subject so "Is my server still running?" stays local.
 """
 from __future__ import annotations
 
@@ -29,6 +33,12 @@ import search
     "Who is the mayor of Chicago?",
     "Who is the Secretary of State?",
     "Who owns the Washington Post?",
+    "Is Sam Altman still running OpenAI?",
+    "Is Tim Cook still the CEO of Apple?",
+    "Does Elon Musk still own Twitter?",
+    "Is Jerome Powell still Fed chair?",
+    "Is Keir Starmer still prime minister?",
+    "Is Xi Jinping still in power?",
 ])
 def test_current_role_questions_force_search(q):
     intent = search.detect_intent(q)
@@ -46,6 +56,12 @@ def test_current_role_questions_force_search(q):
     "What does a CEO do?",
     "Explain the role of the prime minister in parliament.",
     "who is he",
+    "Is my server still running?",
+    "Is the build still running?",
+    "Is Docker still running on port 8080?",
+    "Is Python still the best language for data science?",
+    "Is the Mona Lisa still in the Louvre?",
+    "Was Steve Jobs still running Apple in 2010?",
 ])
 def test_non_role_or_historical_questions_do_not(q):
     intent = search.detect_intent(q)

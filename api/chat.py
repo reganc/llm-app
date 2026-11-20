@@ -462,7 +462,7 @@ async def _retrieval_query(history: list[dict], query: str, *,
 async def _resolve_context(query: str, command: str | None,
                            stream: bool, allow_two_pass: bool, *,
                            use_search: bool, use_memory: bool,
-                           store: bool = True
+                           store: bool = True, saved_only: bool = False
                            ) -> tuple[dict | None, list[dict], bool, list[str], str | None]:
     """Run memory retrieval + optional search up-front.
 
@@ -538,7 +538,8 @@ async def _resolve_context(query: str, command: str | None,
         chunks = _merge_url_matches(chunks, title_matches)
         return None, chunks, False, intent_signals, command
 
-    chunks = _relevant(await mem.retrieve(query), query) if query else []
+    chunks = (_relevant(await mem.retrieve(query, saved_only=saved_only), query)
+              if query else [])
     if title_matches:
         seen_ids = {c.get("identifier") for c in title_matches if c.get("identifier")}
         chunks = title_matches + [c for c in chunks
@@ -706,7 +707,7 @@ async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, 
     """
     _, chunks, _, intent_signals, command = await _resolve_context(
         retrieval_query, None, req.stream, False,
-        use_search=False, use_memory=use_memory, store=req.store,
+        use_search=False, use_memory=use_memory, store=req.store, saved_only=True,
     )
     library_primary = command == "library"
     if not library_primary:

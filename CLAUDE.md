@@ -134,6 +134,8 @@ Coverage:
 | `test_query_rewrite.py` | follow-up rewrite gate, entity/number grounding guard, fallbacks; endpoints retrieve with the rewrite but answer the original |
 | `test_store_opt_out.py` | `store:false` skips turn storage + search ingest on chat/reasoning (JSON, SSE, commands, two-pass) |
 | `test_memory_relevance.py` | auto-recall relevance gate (`MEMORY_MIN_SCORE` + query-term overlap); library mode and title/URL matches exempt; 0 disables |
+| `test_saved_only_recall.py` | agent pre-fetch filters to user-saved sources *before* the top-k cut (`retrieve(saved_only=True)`) |
+| `test_context_block_markers.py` | stale `[W#]/[L#]` markers in stored text are stripped before reaching the model, so `Trace.renumber` can't count them as shown |
 | `test_agent.py` | tool loop core — round/call bounds, forced final answer, arg validation, duplicate suppression, tool-error containment, marker renumbering, streaming |
 | `test_agent_endpoint.py` | agent mode on `/v1/chat/completions` — opt-in/out, bypasses (response_format, raw, /commands, library mode), metadata, `store:false`, SSE event order |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
