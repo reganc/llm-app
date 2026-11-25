@@ -17,6 +17,7 @@ import conversations as conv_store
 import memory as mem
 import ollama as oll
 import rewrite
+import images
 import search
 import skills
 import x_search
@@ -178,6 +179,8 @@ class ConversationCreateRequest(BaseModel):
 
 class ConversationMessageRequest(BaseModel):
     content: str
+    # data:image/...;base64 URLs, for this message only (not stored)
+    images: list[str] = Field(default_factory=list, max_length=images.MAX_IMAGES)
     model: str = Field(default_factory=get_active_model)
     temperature: float = 0.7
     max_tokens: int = 2048
@@ -297,6 +300,17 @@ def _parse_command(raw: str) -> tuple[str, str | None, str]:
     if low.startswith("/lib "):
         return raw[5:].strip(), "library", raw
     return raw, None, raw
+
+
+def _request_images(messages: list[Message]) -> list[str]:
+    """The most recent user message's attached images, prepared for the model."""
+    for m in reversed(messages):
+        if m.role == "user" and (urls := images.from_content(m.content)):
+            try:
+                return images.prepare_all(urls)
+            except images.ImageError as e:
+                raise HTTPException(422, str(e)) from None
+    return []
 
 
 def _inject_messages(messages: list[Message], system_key: str | None,
@@ -754,7 +768,7 @@ def _with_tool_guidance(messages: list[dict]) -> list[dict]:
 
 async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, *,
                             use_search: bool, use_memory: bool,
-                            skill: dict | None = None):
+                            skill: dict | None = None, pictures: list[str] | None = None):
     """/v1/chat/completions via the tool-calling loop (see agent.py).
 
     Memory is still pre-fetched (relevance-gated, with library-intent and
@@ -772,7 +786,12 @@ async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, 
         # what the user saved; the model can still reach the rest via
         # library_search. Library mode (explicit) keeps everything.
         chunks = [c for c in chunks if mem.is_user_saved(c)]
-    tools = [] if library_primary else agent.tools_for(web=use_search, library=use_memory)
+    library_tool = use_memory
+    if pictures and not images.WANTS_WEB.search(clean):
+        use_search = False  # a question about the picture itself
+    if pictures and not _LIBRARY_INTENT_RE.search(clean):
+        library_tool = False  # it searched the library for "What is the total?"
+    tools = [] if library_primary else agent.tools_for(web=use_search, library=library_tool)
     trace = agent.Trace()
     memory_block = None
     if chunks:
@@ -795,7 +814,7 @@ async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, 
     messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
     if tools:
         messages = _with_tool_guidance(messages)
-    messages = skills.apply(messages, skill)
+    messages = images.attach(skills.apply(messages, skill), pictures or [])
     best_score = max((c.get("score", 0) for c in chunks), default=0)
     messages = _inject_context(messages, search_block=search_block,
                                memory_block=memory_block,
@@ -903,7 +922,10 @@ async def chat_completions(req: ChatRequest):
         use_search = use_memory = inject_system = False
     fmt = _ollama_format(req.response_format)
 
+    pictures = _request_images(req.messages)
     raw_query = req.messages[-1].text() if req.messages else ""
+    if pictures and not raw_query.strip():
+        raw_query = images.DEFAULT_QUESTION
     skill = None
     if inject_system:
         raw_query, skill = skills.split(raw_query)
@@ -935,7 +957,7 @@ async def chat_completions(req: ChatRequest):
     if use_agent:
         return await _agent_completion(req, clean, retrieval_query,
                                        use_search=use_search, use_memory=use_memory,
-                                       skill=skill)
+                                       skill=skill, pictures=pictures)
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         retrieval_query, command, req.stream, allow_two_pass,
         use_search=use_search, use_memory=use_memory, store=req.store,
@@ -943,9 +965,9 @@ async def chat_completions(req: ChatRequest):
 
     messages = (
         _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
-        if inject_system else [m.model_dump() for m in req.messages]
+        if inject_system else [{"role": m.role, "content": m.text()} for m in req.messages]
     )
-    messages = skills.apply(messages, skill)
+    messages = images.attach(skills.apply(messages, skill), pictures)
 
     library_primary = command == "library"
     # When the user explicitly typed /search or /x, the *fresh* results are
@@ -1037,6 +1059,8 @@ async def chat_completions(req: ChatRequest):
 async def reasoning(req: ReasoningRequest):
     metrics["total_requests"] += 1
     metrics["reasoning_requests"] += 1
+    if any(images.from_content(m.content) for m in req.messages):
+        raise HTTPException(422, "Images aren't supported in reasoning mode. Ask without it.")
     raw_query = req.messages[-1].text() if req.messages else ""
     clean, command, _ = _parse_command(raw_query)
     if command:
@@ -1213,16 +1237,21 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
-    content, skill = skills.split(req.content)
+    try:
+        pictures = images.prepare_all(req.images)
+    except images.ImageError as e:
+        raise HTTPException(422, str(e)) from None
+    content, skill = skills.split(req.content.strip() or (images.DEFAULT_QUESTION if pictures else ""))
     clean, command, _ = _parse_command(content)
-    conv = conv_store.append_message(conv_id, "user", clean)
+    # The image itself isn't kept: later turns see that there was one.
+    conv = conv_store.append_message(conv_id, "user", clean + (" (with an image)" if pictures else ""))
 
     fresh_system = build_system(conv.get("system_prompt_key"))
     base = [
         {**m, "content": fresh_system} if m["role"] == "system" else m
         for m in conv["messages"]
     ]
-    base = skills.apply(base, skill)
+    base = images.attach(skills.apply(base, skill), pictures)
 
     allow_two_pass = CFG.search_enabled and not req.stream and not command
     retrieval_query = await _retrieval_query(

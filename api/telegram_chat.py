@@ -17,6 +17,7 @@ from collections import deque
 
 import agent
 import chat
+import images
 import notify
 import ollama as oll
 import routine_query
@@ -81,6 +82,7 @@ HELP = (
     "/skills: your saved skills\n"
     "/search …: always search the web\n"
     "/new: forget this conversation\n"
+    "Send a photo, with a question as its caption, to ask about it.\n"
     "Reply to a notification to ask about it, or reply “more” for all of it."
 )
 _MORE = {"more", "full", "details", "/more", "sources"}
@@ -296,13 +298,14 @@ def _about(routine: dict, run: dict) -> str | None:
 
 
 async def answer(question: str, *, skill: dict | None = None, force_search: bool = False,
-                 context: str | None = None) -> str:
+                 context: str | None = None, pictures: list[str] | None = None) -> str:
     """One answer with its sources, ready to send."""
     library, history = library_allowed(), _turns()
-    tools = agent.tools_for(web=CFG.search_enabled, library=library)
+    web = CFG.search_enabled and (not pictures or bool(images.WANTS_WEB.search(question)))
+    tools = agent.tools_for(web=web, library=library)
     query = await chat._retrieval_query(history, question, enabled=CFG.search_enabled)
     trace, block = agent.Trace(), None
-    if CFG.search_enabled and (force_search or get_search_always()
+    if web and (force_search or get_search_always()
                                or search.detect_intent(query).get("force_search")):
         # The subject alone: "What's the latest…" finds dictionary pages for "what".
         wanted = query if force_search else routine_query.search_phrase(query)
@@ -313,13 +316,14 @@ async def answer(question: str, *, skill: dict | None = None, force_search: bool
         messages += [{"role": "user", "content": search_block_prompt(block)},
                      {"role": "assistant", "content": "Understood. I'll cite a marker for every fact."}]
     messages.append({"role": "user", "content": f"{context or ''}{question}"})
+    messages = images.attach(messages, pictures or [])
     base = oll.build_payload(messages, get_active_model(), temperature=0.4, max_tokens=_MAX_TOKENS)
     data, trace = await agent.run(messages, base, tools, store=False, trace=trace)
     content = ((data.get("message") or {}).get("content") or "").strip()
     if not content:
         return "I couldn't come up with an answer. Try again in a moment."
     content = agent.tidy_citations(content)
-    _remember(question, content)
+    _remember(question + (" (with a photo)" if pictures else ""), content)
     if data.get("done_reason") == "length":
         content += "\n(cut short)"
     note = _CANT if _CLAIMS.search(content) or _OFFERS.search(content) else ""
@@ -401,10 +405,39 @@ async def _command(name: str, arg: str) -> bool:
     return True
 
 
+def _picture_id(message: dict) -> str | None:
+    """The file to read: the largest photo size the model can use, or an image file."""
+    sizes = [p for p in message.get("photo") or [] if isinstance(p, dict) and p.get("file_id")]
+    if sizes:
+        fits = [p for p in sizes if max(p.get("width", 0), p.get("height", 0)) <= images.LONGEST_EDGE]
+        return max(fits or sizes[:1], key=lambda p: p.get("width", 0) * p.get("height", 0))["file_id"]
+    doc = message.get("document") or {}
+    if isinstance(doc, dict) and str(doc.get("mime_type", "")).startswith("image/") and doc.get("file_id"):
+        return doc["file_id"]
+    return None
+
+
+async def _photo(message: dict, caption: str) -> None:
+    try:
+        raw = await notify.download(_picture_id(message) or "")
+        pictures = [images.prepare(raw)]
+    except (notify.NotifyError, images.ImageError) as e:
+        await _say(f"I couldn't read that image. {e}")
+        return
+    await _ask(caption or images.DEFAULT_QUESTION, pictures=pictures)
+
+
 async def _handle(message: dict) -> None:
+    caption = (message.get("caption") or "").strip()[:_MAX_TEXT]
+    if _picture_id(message):
+        if _ASKS.search(caption):
+            await _say(_REFUSE)
+            return
+        await _photo(message, caption)
+        return
     text = (message.get("text") or "").strip()[:_MAX_TEXT]
     if not text:
-        await _say("I can only read text messages.")
+        await _say("I can only read text messages and photos.")
         return
     forwarded = bool(message.get("forward_origin") or message.get("forward_date"))
     target = _by_message((message.get("reply_to_message") or {}).get("message_id"))

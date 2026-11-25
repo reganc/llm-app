@@ -53,6 +53,7 @@ llm-app/
 │   ├── watch_runner.py         # page-watch schedule and alerts
 │   ├── watch_check.py          # reads and compares watched pages (no model)
 │   ├── watch_store.py          # watches (JSON files)
+│   ├── images.py               # attached images: checked, shrunk, metadata dropped
 │   ├── briefing.py             # morning briefing (no model)
 │   ├── calendar_feed.py        # today's events from a private iCal address
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
@@ -162,6 +163,7 @@ Coverage:
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
+| `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
@@ -266,6 +268,17 @@ notification rules: library results are only counted) and the homelab-triage dig
 (mounted read-only at `/triage`) are quoted by code. The calendar address
 (`GOOGLE_CALENDAR_ICS_URL`) is a password: only Google's private iCal address is accepted,
 `RedactCalendar` keeps it out of logs, and errors never include it.
+
+**Images** (`api/images.py`): OpenAI-style `image_url` parts on `/v1/chat/completions`
+(the latest user message's images go on the latest question), `images` on conversation
+messages (not stored), photos in Telegram. Only `data:` URLs are accepted, never links.
+Each image is decoded with Pillow, limited (10 MB, 40 MP, 4 per message), shrunk to
+1600 px and re-encoded as JPEG, dropping metadata. Measured: 36/36 details read; asked
+for something not in the picture it usually invented one (1/7 refused) until
+`IMAGE_GUIDANCE` (5/7). With an image, web search runs only if the question asks for it
+(`WANTS_WEB`), and the library tool only for library questions: otherwise it searched
+both for "What's the total?" and took 15-20 s instead of 1-4 s. Thinking
+mode was tried and dropped (minutes, empty answers). Reasoning mode refuses images.
 
 **Skills** (`api/skills.py`): `/name …` in chat or Telegram, or a routine's `skill`.
 Text added to the system prompt, nothing else; a skill in use can't be deleted.

@@ -14,6 +14,7 @@ const State = {
   conversations: [],          // [{id, name, updated_at, turn_count}]
   activeConvId: null,         // null = quick (ephemeral) chat
   thread: [],                 // current quick-chat in-memory transcript
+  images: [],                 // data URLs waiting to go with the next message
   streaming: false,
   searchOn: true,            // default ON — visual matches SEARCH_ALWAYS=true
   sidebarCollapsed: false,
@@ -273,6 +274,10 @@ function renderMessage(m) {
   content.innerHTML = renderMd(m.content || "") + (m.streaming ? '<span class="cursor"></span>' : "");
   if (m.streaming) m._contentNode = content;
   const children = [meta, content];
+  if (m.images?.length) {
+    children.splice(1, 0, el("div", { class: "msg-images" },
+      m.images.filter(safeImage).map(src => el("img", { src, alt: "Attached image" }))));
+  }
   if (m.role === "assistant" && !m.streaming && m.message_id) {
     children.push(renderFeedback(m));
   }
@@ -324,7 +329,7 @@ async function sendFeedback(m, rating) {
 function setStreaming(on, label = "") {
   State.streaming = on;
   $("#streamStatus").textContent = on ? (label || "Generating…") : "";
-  $("#sendBtn").disabled = on || !$("#composerInput").value.trim();
+  $("#sendBtn").disabled = on || (!$("#composerInput").value.trim() && !State.images.length);
 }
 
 // ─────────────────────── Conversation ops ───────────────────────
@@ -370,15 +375,17 @@ async function deleteConv(id) {
 
 // ─────────────────────── Send message (streaming) ───────────────────────
 async function sendMessage(text, { asMessage = false } = {}) {
-  if (!text.trim() || State.streaming) return;
-  const routine = asMessage ? null : routineRequest(text);
+  const pictures = State.images.slice();
+  if ((!text.trim() && !pictures.length) || State.streaming) return;
+  const routine = asMessage || pictures.length ? null : routineRequest(text);
   if (routine) {
     $("#composerInput").value = "";
     autoresize($("#composerInput"));
     return Routines.openDraft(routine.text,
       routine.explicit ? null : () => sendMessage(text, { asMessage: true }));
   }
-  const userMsg = { role: "user", content: text };
+  const userMsg = { role: "user", content: text, ...(pictures.length ? { images: pictures } : {}) };
+  setImages([]);
   State.thread.push(userMsg);
   const assistant = { role: "assistant", content: "", streaming: true };
   State.thread.push(assistant);
@@ -387,7 +394,7 @@ async function sendMessage(text, { asMessage = false } = {}) {
   autoresize($("#composerInput"));
   setStreaming(true, hintFor(text));
 
-  const isUrlAlone = /^https?:\/\/\S+$/.test(text.trim());
+  const isUrlAlone = !pictures.length && /^https?:\/\/\S+$/.test(text.trim());
   // URL alone → treat as ingest into a new conversation
   if (isUrlAlone && !State.activeConvId) {
     return ingestUrlAndOpen(text.trim(), assistant);
@@ -418,9 +425,12 @@ function hintFor(text) {
 }
 
 async function streamQuickChat(userText, assistant) {
-  const messages = State.thread
-    .filter(m => m.role !== "system" && !(m === assistant))
-    .map(({ role, content }) => ({ role, content }));
+  const history = State.thread.filter(m => m.role !== "system" && !(m === assistant));
+  // Only the latest pictures go along: the server uses those, and old ones are large.
+  const withImages = history.findLast(m => m.images?.length);
+  const messages = history.map(({ role, content, images }) => (images?.length && withImages?.images === images)
+    ? { role, content: [{ type: "text", text: content }, ...images.map(url => ({ type: "image_url", image_url: { url } }))] }
+    : { role, content });
   // Search pill is now a hint to the backend's auto-search heuristic, not a force.
   // Use explicit "/search ..." or "/x ..." commands when you want to force a web/X query.
   await streamSSE("/v1/chat/completions", {
@@ -432,8 +442,10 @@ async function streamQuickChat(userText, assistant) {
 }
 
 async function streamConversation(userText, assistant) {
+  const last = State.thread.findLast(m => m.role === "user");
   await streamSSE(`/v1/conversations/${State.activeConvId}/messages`, {
     content: userText,
+    images: last?.images || [],
     model: State.settings.default_model,
     stream: true,
   }, assistant);
@@ -719,8 +731,14 @@ function bindComposer() {
   const form = $("#composer");
   ta.addEventListener("input", () => {
     autoresize(ta);
-    $("#sendBtn").disabled = State.streaming || !ta.value.trim();
+    $("#sendBtn").disabled = State.streaming || (!ta.value.trim() && !State.images.length);
   });
+  ta.addEventListener("paste", (e) => {
+    const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith("image/"));
+    if (files.length) { e.preventDefault(); addImages(files); }
+  });
+  $("#imageBtn").addEventListener("click", () => $("#imageInput").click());
+  $("#imageInput").addEventListener("change", (e) => { addImages([...e.target.files]); e.target.value = ""; });
   ta.addEventListener("keydown", (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
@@ -770,9 +788,54 @@ function bindDnD() {
     e.preventDefault();
     counter = 0;
     overlay.hidden = true;
-    const file = e.dataTransfer?.files?.[0];
-    if (file) ingestFile(file);
+    const files = [...(e.dataTransfer?.files || [])];
+    const pictures = files.filter(f => f.type.startsWith("image/"));
+    if (pictures.length) addImages(pictures);   // an image is asked about, not saved
+    else if (files[0]) ingestFile(files[0]);
   });
+}
+
+// ─────────────────────── Images ───────────────────────
+const MAX_IMAGES = 4;
+const IMAGE_EDGE = 1600;
+const safeImage = (src) => typeof src === "string" && /^data:image\/(png|jpeg|webp|gif);base64,/.test(src);
+
+// Shrunk here so uploads stay small; the server checks and shrinks again.
+async function shrink(file) {
+  if (file.size > 25_000_000) throw new Error("too large");
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, IMAGE_EDGE / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvas.toDataURL("image/jpeg", 0.9);
+}
+
+async function addImages(files) {
+  for (const file of files) {
+    if (State.images.length >= MAX_IMAGES) { toast(`At most ${MAX_IMAGES} images per message`, "info", 3000); break; }
+    if (!file.type.startsWith("image/")) continue;
+    try { setImages([...State.images, await shrink(file)]); }
+    catch { toast(`Couldn't read ${file.name || "that image"}`, "error", 4000); }
+  }
+  $("#composerInput").focus();
+}
+
+function setImages(list) {
+  State.images = list;
+  const tray = $("#imageTray");
+  tray.hidden = !list.length;
+  tray.querySelector(".image-thumbs").replaceChildren(...list.map((src, i) => el("div", { class: "image-thumb" }, [
+    el("img", { src, alt: `Image ${i + 1}` }),
+    el("button", { type: "button", class: "icon-btn", title: "Remove", text: "×",
+      onclick: () => setImages(State.images.filter((_, j) => j !== i)) }),
+  ])));
+  $("#sendBtn").disabled = State.streaming || (!$("#composerInput").value.trim() && !list.length);
 }
 
 // ─────────────────────── Settings modal ───────────────────────

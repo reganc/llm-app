@@ -259,3 +259,20 @@ def test_find_chats_conflict_is_explained(c):
     c.tg.replies = [httpx.Response(409, json={"ok": False, "description": "webhook"})]
     r = c.get("/v1/notify/telegram/chats", headers=AUTH)
     assert r.status_code == 502 and "another" in r.json()["detail"]
+
+
+def test_download_keeps_the_token_out_of_errors(tg):
+    tg.replies = [httpx.Response(200, json={"ok": True, "result": {"file_path": "photos/a.jpg", "file_size": 10}}),
+                  httpx.Response(200, content=b"IMG")]
+    assert run(notify.download("f1")) == b"IMG"
+    assert tg.requests[-1][0].endswith("/photos/a.jpg") and "/file/bot" in tg.requests[-1][0]
+    for replies, word in (
+        ([httpx.Response(200, json={"ok": True, "result": {"file_path": "../x"}})], "did not give"),
+        ([httpx.Response(200, json={"ok": True, "result": {"file_path": "a", "file_size": 10**8}})], "too large"),
+        ([httpx.Response(200, json={"ok": True, "result": {"file_path": "a"}}), httpx.Response(404)], "404"),
+        ([httpx.Response(200, json={"ok": True, "result": {"file_path": "a"}}), httpx.ConnectError(f"bot{TOKEN}")], "reach"),
+    ):
+        tg.replies = list(replies)
+        with pytest.raises(notify.NotifyError) as e:
+            run(notify.download("f"))
+        assert word in str(e.value) and TOKEN not in str(e.value)

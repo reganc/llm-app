@@ -471,3 +471,97 @@ def test_routine_polls_are_not_logged_but_problems_are():
     assert f.filter(rec('POST https://api.telegram.org/bot1:x/getUpdates "HTTP/1.1 200 OK"')) is False
     assert f.filter(rec('POST https://api.telegram.org/bot1:x/getUpdates "HTTP/1.1 409 Conflict"')) is True
     assert f.filter(rec('POST https://api.telegram.org/bot1:x/sendMessage "HTTP/1.1 200 OK"')) is True
+
+
+# ── photos ───────────────────────────────────────────────────────────────────
+
+def _png(w=40, h=30):
+    import io
+    from PIL import Image
+    out = io.BytesIO()
+    Image.new("RGB", (w, h), "white").save(out, "PNG")
+    return out.getvalue()
+
+
+@pytest.fixture
+def files(env, monkeypatch):
+    got = []
+
+    async def download(file_id):
+        got.append(file_id)
+        if file_id == "bad":
+            return b"not an image"
+        if file_id == "big":
+            raise tc.notify.NotifyError("That file is too large (10 MB at most).")
+        return _png()
+    monkeypatch.setattr(tc.notify, "download", download)
+    return got
+
+
+def photo(caption=None, sizes=((90, 60, "s"), (800, 600, "m"), (2560, 1920, "l")), **kw):
+    m = msg(**kw)
+    m["message"].pop("text")
+    m["message"]["photo"] = [{"file_id": f, "width": w, "height": h} for w, h, f in sizes]
+    if caption is not None:
+        m["message"]["caption"] = caption
+    return m
+
+
+def test_a_photo_with_a_caption_is_asked_about_with_the_image(env, files):
+    env.replies = ["A white square."]
+    assert say(env, photo("what is this?")) == ["A white square."]
+    last = env.payloads[-1]["messages"]
+    assert files == ["m"] and last[-1]["content"] == "what is this?" and len(last[-1]["images"]) == 1
+    assert "isn't shown" in last[0]["content"]
+
+
+def test_a_photo_alone_is_described_and_remembered_as_a_photo(env, files):
+    say(env, photo())
+    assert env.payloads[-1]["messages"][-1]["content"] == "Describe this image."
+    say(env, msg("and the colour?"))
+    assert "(with a photo)" in str(env.payloads[-1]["messages"]) and "images" not in env.payloads[-1]["messages"][-1]
+
+
+def test_only_small_sizes_when_all_are_too_big(env, files):
+    say(env, photo(sizes=((3000, 2000, "x"), (4000, 3000, "y"))))
+    assert files == ["x"]
+
+
+def test_image_files_count_and_other_files_do_not(env, files):
+    m = msg()
+    m["message"].pop("text")
+    m["message"]["document"] = {"file_id": "doc1", "mime_type": "image/jpeg"}
+    say(env, m)
+    assert files == ["doc1"]
+    m = msg()
+    m["message"].pop("text")
+    m["message"]["document"] = {"file_id": "doc2", "mime_type": "application/pdf"}
+    assert say(env, m) == ["I can only read text messages and photos."] and files == ["doc1"]
+
+
+@pytest.mark.parametrize("file_id,word", [("bad", "could not be read"), ("big", "too large")])
+def test_unreadable_photos_are_explained(env, files, file_id, word):
+    out = say(env, photo("x", sizes=((100, 100, file_id),)))
+    assert word in out[0] and env.payloads == []
+
+
+def test_photo_captions_cannot_run_commands_or_ask_to_act(env, files):
+    routine()
+    say(env, photo("/pause 1"))
+    assert store.list_all()[0]["enabled"] is True
+    assert say(env, photo("pay this bill")) == [tc._REFUSE]
+
+
+def test_strangers_photos_are_never_downloaded(env, files):
+    say(env, photo("x", chat={"id": 7, "type": "private"}, **{"from": {"id": 7}}))
+    assert files == []
+
+
+def test_photo_questions_search_only_when_asked(env, files):
+    def offered(since):
+        return {t["function"]["name"] for p in env.payloads[since:] for t in p.get("tools", [])}
+    say(env, photo("what's the total?"))
+    assert "web_search" not in offered(0)
+    n = len(env.payloads)
+    say(env, photo("search the web for this product"))
+    assert "web_search" in offered(n)

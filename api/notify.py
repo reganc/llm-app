@@ -114,6 +114,34 @@ async def call(method: str, payload: dict, timeout: float = 15.0) -> object:
     raise NotifyError(problem)
 
 
+_MAX_FILE_BYTES = 10_000_000
+
+
+async def download(file_id: str) -> bytes:
+    """A file the user sent the bot. Its URL holds the token, so errors never include it."""
+    info = await call("getFile", {"file_id": file_id})
+    path = info.get("file_path") if isinstance(info, dict) else None
+    size = info.get("file_size") if isinstance(info, dict) else None
+    if not isinstance(path, str) or not path or ".." in path:
+        raise NotifyError("Telegram did not give the file.")
+    if isinstance(size, int) and size > _MAX_FILE_BYTES:
+        raise NotifyError("That file is too large (10 MB at most).")
+    url = f"{API_BASE}/file/bot{CFG.telegram_bot_token}/{path}"
+    try:
+        async with _client(30.0) as client:
+            async with client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    raise NotifyError(f"Telegram returned an error ({response.status_code}).")
+                body = b""
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > _MAX_FILE_BYTES:
+                        raise NotifyError("That file is too large (10 MB at most).")
+                return body
+    except httpx.HTTPError:  # its text can contain the URL
+        raise NotifyError("Could not reach Telegram.") from None
+
+
 def _cut(text: str, limit: int = _LIMIT) -> str:
     """Shorten to `limit` UTF-16 units, the way Telegram counts."""
     raw = text.encode("utf-16-le")
