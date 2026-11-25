@@ -336,6 +336,10 @@ _MIN_NEWS = 5
 _MIN_ON_TOPIC = 3
 _NEWS_RESULTS = 8
 _MAX_EXTRA_RESULTS = 20
+# Extra stories fetched so that ones with a readable page can replace previews.
+_SPARE_NEWS = 4
+# A page that yields less text than this is no better than its search preview.
+_READABLE_CHARS = 500
 
 
 async def searxng_news(query: str, num: int) -> list[dict]:
@@ -459,7 +463,9 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
                             exclude_titles: tuple[str, ...] = ()) -> dict:
     """`exclude_urls` (norm_url form) and `exclude_titles` drop stories the caller
     has already seen; `all_seen` in the reply means nothing else was found.
-    `shown` in the reply maps each marker to the text the model is given for it."""
+    `shown` in the reply maps each marker to the text the model is given for it, and
+    `previews` lists the markers whose page could not be read. News stories with a
+    readable page come first."""
     if not CFG.search_enabled:
         return {"query": query, "results": [], "context_text": "",
                 "stored": 0, "error": "Search disabled"}
@@ -470,7 +476,8 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
     from x_search import search_x  # local import to avoid cycle
 
     # Ask for extra so dropping seen results still leaves enough.
-    ask = num + min(len(exclude_urls), _MAX_EXTRA_RESULTS)
+    fetch = num + (_SPARE_NEWS if news else 0)
+    ask = fetch + min(len(exclude_urls), _MAX_EXTRA_RESULTS)
     raw, aux, x_items = await asyncio.gather(
         searxng_news(query, ask) if news else searxng_search(query, ask),
         fetch_aux_sites() if include_aux else _empty(),
@@ -483,7 +490,7 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
         return (norm_url(r["url"]) not in exclude_urls
                 and not any(same_headline(r.get("title", ""), t) for t in exclude_titles))
 
-    raw, x_items = [r for r in raw if unseen(r)][:num], [r for r in x_items if unseen(r)]
+    raw, x_items = [r for r in raw if unseen(r)][:fetch], [r for r in x_items if unseen(r)]
     if not (raw or aux or x_items):
         if found:
             return {"query": query, "results": [], "context_text": "", "stored": 0,
@@ -506,6 +513,8 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
             return r
 
     web = [r for r in await asyncio.gather(*[enrich(r) for r in raw]) if r.get("text", "").strip()]
+    if news:
+        web = sorted(web, key=lambda r: len(r["text"]) < _READABLE_CHARS)[:num]
     web += aux
 
     stored = 0
@@ -535,6 +544,7 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
     # (1500/400/300 × 6/6/3) which dropped mid-page price/datum tables off
     # the cliff.
     shown: dict[str, str] = {}
+    previews: list[str] = []
     lines = [f"── LIVE SEARCH RESULTS for: {query} (retrieved {retrieved_at}) ──"]
     if query_items:
         lines.append("[ WEB SEARCH RESULTS ]")
@@ -542,6 +552,8 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
             preview = _focused_excerpt(r.get("text", ""), query, 2800)
             lines.append(f"[W{i}] {r['title']}\nURL: {r['url']}\n{preview}")
             shown[f"W{i}"] = f"{r['title']}\n{preview}"
+            if len(r.get("text", "")) < _READABLE_CHARS:
+                previews.append(f"W{i}")
     if x_items:
         lines.append("[ X / TWITTER — LATEST POSTS ]")
         for i, r in enumerate(x_items[:10], 1):
@@ -573,6 +585,7 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
                     for r in all_results],
         "context_text": context_text,
         "shown": shown,
+        "previews": previews,
         "stored": stored,
         "source": "+".join(sources) if sources else "unknown",
         "retrieved_at": retrieved_at,

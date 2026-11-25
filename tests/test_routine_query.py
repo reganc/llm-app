@@ -17,6 +17,8 @@ import routine_query as q
     ("Please find stories about SpaceX launches. Use plain English.", "stories about SpaceX launches"),
     ("Compare Claude and GPT pricing in a table", "Claude GPT pricing"),
     ("What is the latest stable Python version and when was it released?", "stable Python version"),
+    ("Summarize climate change news in 4 bullets, include quotes", "climate change news"),
+    ("Summarize AI toy safety news, with quotes and sources", "AI toy safety news"),
     ("the US Open results", "US Open results"),
     ("What's new in Python?", "Python"),
     ("Resuma las noticias de IA", "Resuma las noticias de IA"),

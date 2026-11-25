@@ -114,6 +114,8 @@ class Trace:
     sources: dict[str, dict] = field(default_factory=dict)
     # Marker -> the text the model was given for it.
     texts: dict[str, str] = field(default_factory=dict)
+    # Markers whose page could not be read, only its search preview.
+    previews: set[str] = field(default_factory=set)
     # Applied to every web search in this run, including the model's own.
     news: bool = False
     include_aux: bool = True
@@ -145,7 +147,8 @@ class Trace:
         self.markers = seen
         return out
 
-    def add_web_sources(self, results: list[dict], shown: dict[str, str] | None = None) -> None:
+    def add_web_sources(self, results: list[dict], shown: dict[str, str] | None = None,
+                        previews: list[str] | None = None) -> None:
         """Record what each marker in the next web block refers to. Must run
         before `renumber`, whose offsets it mirrors; results keep the order
         search_and_ingest numbered them in."""
@@ -154,7 +157,8 @@ class Trace:
             kind = {"x_twitter": "X", "auxiliary_site": "A"}.get(r.get("engine") or "", "W")
             counts[kind] += 1
             self._add_source(kind, counts[kind], r.get("title"), r.get("url"),
-                             (shown or {}).get(f"{kind}{counts[kind]}"))
+                             (shown or {}).get(f"{kind}{counts[kind]}"),
+                             preview=f"{kind}{counts[kind]}" in (previews or ()))
 
     def add_library_sources(self, chunks: list[dict]) -> None:
         for i, c in enumerate(chunks, 1):
@@ -162,8 +166,10 @@ class Trace:
                              f"{c.get('title') or ''}\n{c.get('text') or ''}")
 
     def _add_source(self, kind: str, n: int, title: str | None, url: str | None,
-                    text: str | None = None) -> None:
+                    text: str | None = None, preview: bool = False) -> None:
         marker = f"{kind}{self.markers[kind] + n}"
+        if preview:
+            self.previews.add(marker)
         if text:
             self.texts[marker] = text
         self.sources[marker] = {"title": title or url or marker, "url": url or ""}
@@ -222,7 +228,7 @@ async def _web_search(query: str, trace: Trace, *, store: bool) -> str:
         return f"No web results for {query!r}."
     results = result.get("results") or []
     trace.web_results.extend(results)
-    trace.add_web_sources(results, result.get("shown"))
+    trace.add_web_sources(results, result.get("shown"), result.get("previews"))
     return trace.renumber(text)
 
 

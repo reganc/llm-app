@@ -92,3 +92,52 @@ def test_large_answers_are_fast():
     start = time.perf_counter()
     rc.check("\n".join(f"- Nvidia shares fell {i} [W2]" for i in range(400)), {"W2": NV * 40})
     assert time.perf_counter() - start < 2
+
+
+# ── quotes ───────────────────────────────────────────────────────────────────
+
+TOY = {"W1": "PIRG tested AI-powered toys and found that many come with flimsy safety guardrails. "
+             "“The rush to sell toys to young children puts profits before kids’ safety,” the senator said."}
+
+
+def test_exact_quotes_are_kept_whatever_the_quote_style():
+    for text in ('- Many AI toys come with "flimsy safety guardrails" [W1].',
+                 "- The senator said “puts profits before kids' safety” about toys [W1].",
+                 '- The senator said "The rush to sell toys to **young children** puts profits before kids’ safety," [W1].',
+                 '- The senator said "The rush to sell toys … puts profits before kids’ safety." [W1]'):
+        assert rc.check(text, TOY).content == text
+
+
+def test_a_short_altered_quote_loses_its_marks():
+    out = rc.check('- Many AI toys come with "flimsy guardrails" [W1].', TOY)
+    assert out.content == "- Many AI toys come with flimsy guardrails [W1]." and out.removed == []
+
+
+def test_a_long_invented_quote_removes_the_point():
+    out = rc.check('- The senator said "toys are a danger to all young children everywhere" [W1].', TOY)
+    assert out.kept == 0 and "quotes words" in out.removed[0]["reason"]
+
+
+def test_a_quote_must_be_in_the_source_it_cites():
+    texts = {**TOY, "W2": "The senator said toys puts profits before kids safety? No: young children rush to sell."}
+    out = rc.check('- The senator said "The rush to sell toys to young children" [W2].', texts)
+    assert out.kept == 0
+
+
+def test_quotes_match_whole_words_and_survive_odd_marks():
+    assert rc.check('- AI toys have "flimsy safe" parts, many come with guardrails [W1].', TOY).content.count('"') == 0
+    for text in ('- AI toys "flimsy [W1].', '- AI toys "" [W1].', '- AI toys "..." [W1].', '- toys "(((" [W1]'):
+        rc.check(text, TOY)
+
+
+# ── previews ─────────────────────────────────────────────────────────────────
+
+def test_points_resting_only_on_previews_are_labelled():
+    text = "- Nvidia shares fell 4% [W2].\n- Bengaluru lead the Indian standings [W1]."
+    out = rc.check(text, TEXTS, {"W2"})
+    assert out.content == ("- Nvidia shares fell 4% [W2]. (search preview only)\n"
+                           "- Bengaluru lead the Indian standings [W1].")
+
+
+def test_a_point_with_one_readable_source_is_not_labelled():
+    assert "preview" not in rc.check("- Nvidia shares fell; investors sold [W1, W2].", TEXTS, {"W2"}).content

@@ -3,7 +3,11 @@
 Deterministic, per point: a list item (with its sub-items) or a paragraph must
 cite a source, and enough of its words must appear in the text the model was
 given for that source. This catches points with no source and points pinned to
-an unrelated page. It can't tell a subtly wrong claim from a right one,
+an unrelated page. Quotation marks must hold the source's exact words: a long quote
+that doesn't is removed with its point, a short one loses its marks. Points resting
+only on search previews are labelled.
+
+It can't tell a subtly wrong claim from a right one,
 and it can't match a point to a page in another language.
 """
 from __future__ import annotations
@@ -16,9 +20,13 @@ import agent
 # Share of a point's words its cited text must contain.
 _MIN_OVERLAP = 0.5
 _STEM = 5
+# A wrong quote this short is wording ("flimsy guardrails"), not a claimed statement.
+_SHORT_QUOTE_WORDS = 4
+_PREVIEW_LABEL = "(search preview only)"
 _MAX_REMOVED, _REMOVED_CHARS = 20, 400
 
 _ITEM = re.compile(r"^(\s*)(?:[-*•+]|\d{1,2}[.)])\s+\S")
+_QUOTE = re.compile(r'"([^"\n]{1,600})"|“([^”\n]{1,600})”|«([^»\n]{1,600})»')
 _FRAME = re.compile(r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*:?\s*$|[-*_]{3,}\s*$)")
 _STOP = {"that", "this", "with", "from", "have", "been", "were", "will", "would", "could", "should",
          "their", "there", "they", "them", "than", "then", "into", "over", "after", "before", "about",
@@ -104,8 +112,40 @@ def _backed(text: str, cited: list[str], texts: dict[str, str]) -> bool:
     return not claim or len(claim & _tokens(source)) / len(claim) >= _MIN_OVERLAP
 
 
-def check(content: str, texts: dict[str, str]) -> Checked:
-    """`texts` is marker -> the text the model was given for it."""
+def _flat(text: str) -> str:
+    """For comparing wording: case, spacing, emphasis, quote and dash style aside."""
+    text = agent.strip_markers(text).lower()
+    text = re.sub(r"[\"'“”‘’«»*_`]", "", text)
+    text = re.sub(r"[‐‑–—]", "-", text)
+    return " ".join(text.split())
+
+
+def _verbatim(quote: str, source: str) -> bool:
+    pieces = [_flat(p).strip(" .,;:!?-") for p in re.split(r"\[?(?:…|\.\.\.)\]?", quote)]
+    return all(re.search(rf"(?<!\w){re.escape(p)}(?!\w)", source) for p in pieces if p)
+
+
+def _check_quotes(b: _Block, source: str) -> None:
+    """Unquote short wrong quotes; mark the point for removal on a long one."""
+    source = _flat(source)
+
+    def fix(m: re.Match) -> str:
+        quote = next(g for g in m.groups() if g is not None)
+        if _verbatim(quote, source):
+            return m.group(0)
+        if len(quote.split()) > _SHORT_QUOTE_WORDS:
+            b.reason = "quotes words its source does not contain"
+        return quote
+
+    fixed = _QUOTE.sub(fix, b.text)
+    if b.reason is None:
+        b.lines = fixed.splitlines()
+
+
+def check(content: str, texts: dict[str, str],
+          previews: set[str] | frozenset[str] = frozenset()) -> Checked:
+    """`texts` is marker -> the text the model was given for it; `previews` the
+    markers where that is only a search preview."""
     blocks = _blocks(content)
     points = [b for b in blocks if b.kind != "frame"]
     for b in points:
@@ -114,6 +154,10 @@ def check(content: str, texts: dict[str, str]) -> Checked:
             b.reason = "no source cited"
         elif not _backed(b.text, cited, texts):
             b.reason = "could not be matched to the cited source"
+        else:
+            _check_quotes(b, "\n".join(texts.get(m, "") for m in cited))
+            if b.reason is None and all(m in previews for m in cited):
+                b.lines = [*b.lines[:-1], f"{b.lines[-1].rstrip()} {_PREVIEW_LABEL}"]
     kept: list[_Block] = []
     for i, b in enumerate(blocks):
         if b.kind == "frame":                # a heading stays if something under it does

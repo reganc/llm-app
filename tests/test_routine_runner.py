@@ -431,3 +431,30 @@ def test_model_calls_wait_out_the_whole_run(env, monkeypatch):
     monkeypatch.setattr(oll, "chat", chat)
     run(rr.run_routine(make()["id"], "manual"))
     assert seen == [rr.RUN_TIMEOUT_S]
+
+
+def test_preview_markers_follow_renumbering_and_reach_the_result(env, monkeypatch):
+    async def fake(query, **_):
+        return {"context_text": "[W1] Real\nURL: u\n[W2] Two\nURL: v", "results": env.web,
+                "shown": {"W1": "Answer first", "W2": "later claim"}, "previews": ["W2"]}
+    replies = [{"message": {"content": "", "tool_calls": [
+                   {"function": {"name": "web_search", "arguments": {"query": "more"}}}]}},
+               {"message": {"content": "- Answer first [W1].\n- later claim [W4]."}}]
+
+    async def chat(_p, **_):
+        return replies.pop(0)
+    monkeypatch.setattr(search, "search_and_ingest", fake)
+    monkeypatch.setattr(oll, "chat", chat)
+    r = make()
+    run(rr.run_routine(r["id"], "manual"))
+    out = last(r)
+    assert out["content"] == "- Answer first [W1].\n- later claim [W4]. (search preview only)"
+    assert [(s["marker"], s.get("preview")) for s in out["sources"]] == [("W1", None), ("W4", True)]
+
+
+def test_the_model_is_told_to_keep_to_the_sources(env):
+    run(rr.run_routine(make()["id"], "manual"))
+    assert "own wording" in env.payloads[0]["messages"][0]["content"]
+    env.payloads.clear()
+    run(rr.run_routine(make(sources={"web": False, "library": False})["id"], "manual"))
+    assert "own wording" not in env.payloads[0]["messages"][0]["content"]

@@ -205,7 +205,10 @@ whole instruction, which returned a soccer table for AI news. The status is set 
 code, not by the model: `routine_check` removes every point that cites nothing or
 whose words mostly don't appear in the text shown for its source (`Trace.texts`),
 and the run is `ok` only if at least half the points remain, else `unsourced` and
-not notified. It can't catch a claim that twists a page it does match. One run at a time; the next run time is saved before a
+not notified. Quotation marks must hold the source's exact words (a long wrong quote
+drops its point, a short one loses its marks). News stories whose page could be read
+come first; a point resting only on search previews is labelled, as is the source
+(`Trace.previews`). It can't catch a claim that rewords a page it does match. One run at a time; the next run time is saved before a
 run starts; a run found more than an hour late is recorded as `missed`, never
 caught up. Stored as JSON in `DATA_DIR/routines/` (30 runs kept each).
 **Only what's new** (`only_new`): a routine remembers the URLs and text of its

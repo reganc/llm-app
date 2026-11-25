@@ -133,3 +133,46 @@ def test_extra_sites_are_read_only_when_included(monkeypatch, include):
     assert bool(read) is include and ("[A1]" in out["context_text"]) is include
     assert out["shown"]["W1"].startswith("Story") and "story body" in out["shown"]["W1"]
     assert ("A1" in out["shown"]) is include
+
+
+def _pipeline(monkeypatch, rows, pages):
+    async def found(_q, num):
+        found.asked = num
+        return rows[:num]
+
+    async def fetch(url):
+        text = pages.get(url)
+        return {"text": text, "title": "", "char_count": len(text)} if text else None
+    monkeypatch.setattr(search, "CFG", dataclasses.replace(search.CFG, search_enabled=True, x_search_enabled=False))
+    monkeypatch.setattr(search, "searxng_news", found)
+    monkeypatch.setattr(search, "searxng_search", found)
+    monkeypatch.setattr(search, "_fetch_text", fetch)
+    return found
+
+
+ROWS = [item(f"Story {i}", f"https://n.example/{i}", f"preview {i}") for i in range(12)]
+
+
+def test_news_puts_readable_pages_first_and_marks_previews(monkeypatch):
+    _pipeline(monkeypatch, ROWS[:4], {"https://n.example/1": "long " * 200, "https://n.example/3": "long " * 200})
+    out = asyncio.run(search.search_and_ingest("q", store_memory=False, include_aux=False, news=True))
+    assert [r["url"][-1] for r in out["results"]] == ["1", "3", "0", "2"]
+    assert out["previews"] == ["W3", "W4"] and "preview 0" in out["shown"]["W3"]
+
+
+def test_spare_stories_replace_previews_and_the_count_is_kept(monkeypatch):
+    found = _pipeline(monkeypatch, ROWS, {f"https://n.example/{i}": "long " * 200 for i in range(4, 12)})
+    out = asyncio.run(search.search_and_ingest("q", store_memory=False, include_aux=False, news=True))
+    assert found.asked == 12 and len(out["results"]) == 8 and out["previews"] == []
+
+
+def test_ordinary_search_keeps_its_order_and_count(monkeypatch):
+    found = _pipeline(monkeypatch, ROWS, {"https://n.example/2": "long " * 200})
+    out = asyncio.run(search.search_and_ingest("q", num_results=3, store_memory=False, include_aux=False))
+    assert found.asked == 3 and [r["url"][-1] for r in out["results"]] == ["0", "1", "2"]
+
+
+def test_a_near_empty_page_counts_as_a_preview(monkeypatch):
+    _pipeline(monkeypatch, ROWS[:1], {"https://n.example/0": "x" * 255})
+    out = asyncio.run(search.search_and_ingest("q", store_memory=False, include_aux=False, news=True))
+    assert out["previews"] == ["W1"]

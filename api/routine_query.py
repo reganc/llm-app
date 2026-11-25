@@ -18,7 +18,7 @@ _FORMAT = re.compile("|".join((
     rf"\b(?:in|into|as|using|with|under|within)\s+(?:(?:at most|no more than|up to|about)\s+)?"
     rf"(?:{_N}\s+)*(?:[a-z]+\s+)?{_SHAPE}\b",
     r"\b(?:with|including|and|include|cite|attach|add|give|provide)\s+(?:(?:the|your|all|any|their|"
-    r"its|a)\s+)?(?:sources?|links?|citations?|references?|urls?)\b(?:\s+(?:attached|included|cited|"
+    r"its|a)\s+)?(?:sources?|links?|citations?|references?|urls?|quotes?)\b(?:\s+(?:attached|included|cited|"
     r"for\s+each(?:\s+\w+)?))?",
     r"\b(?:from|in|over|during|of|within)\s+the\s+(?:last|past)\s+(?:\w+\s+)?(?:hours?|days?|weeks?|"
     r"months?)\b",

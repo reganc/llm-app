@@ -129,7 +129,7 @@ export function initRoutines({ $, el, api, toast }) {
     const body = el("div", { class: "run-body md" });
     if (run.content) body.innerHTML = renderMd(run.content);
     const sources = (run.sources || []).map(s => {
-      const label = `[${s.marker}] ${s.title}`;
+      const label = `[${s.marker}] ${s.title}${s.preview ? " (search preview only)" : ""}`;
       const url = safeUrl(s.url);
       return el("li", {}, [url
         ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer", text: label })
