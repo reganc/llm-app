@@ -157,6 +157,8 @@ services:
       - ROUTINE_TIMEZONE=${ROUTINE_TIMEZONE:-America/Chicago}
       # Page watches (false stops the checks)
       - WATCHES_ENABLED=${WATCHES_ENABLED:-true}
+      # Optional, secret: Google Calendar's "Secret address in iCal format", for the morning briefing
+      - GOOGLE_CALENDAR_ICS_URL=${GOOGLE_CALENDAR_ICS_URL:-}
       # Optional: Telegram notifications for routines (choose the chat in Settings)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       # Web search
@@ -180,6 +182,8 @@ services:
       - app_data:/app/data
       # Live-reload: edits to api/*.py and api/static/* take effect without rebuild
       - ./api:/app
+      # The homelab-triage digest, read by the morning briefing (read-only)
+      - ${HOMELAB_TRIAGE_VAR:-../homelab-triage/var}:/triage:ro
       # x-cli credentials (only needed if X_SEARCH_ENABLED=true)
       - ${HOME}/.x-cli:/root/.x-cli:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8030", "--reload"]

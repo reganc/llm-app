@@ -246,6 +246,20 @@
           </div>
         </div>
         <div class="field">
+          <label>Morning briefing</label>
+          <div id="briefStatus" class="muted">…</div>
+          <div class="brief-row">
+            <label class="check-line"><input type="checkbox" id="briefToggle" /> Send it every day at</label>
+            <input type="time" id="briefTime" value="07:00" />
+          </div>
+          <small class="muted">Today's calendar, new page-watch alerts, routine results and the homelab digest, in one Telegram message. No AI: every line is quoted from its source. Calendar event titles go through Telegram's servers.</small>
+          <div class="tg-actions">
+            <button type="button" id="briefPreviewBtn" class="ghost-btn" formnovalidate>Preview</button>
+            <button type="button" id="briefSendBtn" class="ghost-btn" formnovalidate>Send now</button>
+          </div>
+          <pre id="briefPreview" class="watch-text brief-preview" hidden></pre>
+        </div>
+        <div class="field">
           <label>Knowledge distillation</label>
           <div id="distillStatus" class="muted-small">…</div>
           <div class="distill-actions">

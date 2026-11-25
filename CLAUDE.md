@@ -53,6 +53,8 @@ llm-app/
 │   ├── watch_runner.py         # page-watch schedule and alerts
 │   ├── watch_check.py          # reads and compares watched pages (no model)
 │   ├── watch_store.py          # watches (JSON files)
+│   ├── briefing.py             # morning briefing (no model)
+│   ├── calendar_feed.py        # today's events from a private iCal address
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -159,6 +161,7 @@ Coverage:
 | `test_routine_query.py` · `test_routine_check.py` · `test_news_search.py` | search phrase from a task, per-point source check, news topic filter/widening/extra sites |
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
+| `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
@@ -256,6 +259,14 @@ loaded twice; lines that flicker are ignored. The user approves each host; every
 request and redirect is resolved once, must be public, and connects to that address
 (SNI/cert still checked). Never fetch a watched page any other way.
 
+**Morning briefing** (`api/briefing.py`, `calendar_feed.py`): off until enabled in
+Settings; daily at its time, after routines due then have run (up to 10 min), skipped if
+found over an hour late. No model: calendar lines, watch alerts, routine headlines (the
+notification rules: library results are only counted) and the homelab-triage digest
+(mounted read-only at `/triage`) are quoted by code. The calendar address
+(`GOOGLE_CALENDAR_ICS_URL`) is a password: only Google's private iCal address is accepted,
+`RedactCalendar` keeps it out of logs, and errors never include it.
+
 **Skills** (`api/skills.py`): `/name …` in chat or Telegram, or a routine's `skill`.
 Text added to the system prompt, nothing else; a skill in use can't be deleted.
 
@@ -311,6 +322,7 @@ flag False and are unchanged.
 - `GET/POST /v1/routines` · `GET/PATCH/DELETE /v1/routines/{id}` · `POST /v1/routines/draft` · `POST /v1/routines/{id}/run` · `POST /v1/routines/{id}/forget` · `GET /v1/routines/inbox` · `POST /v1/routines/inbox/read` · `POST /v1/routines/{id}/runs/{run_id}/read` — scheduled tasks and their results
 - `GET /v1/notify/telegram/status` · `GET …/chats` · `POST …/chat` · `POST …/options` · `POST …/test` — Telegram setup
 - `GET/POST /v1/watches` · `GET/PATCH/DELETE /v1/watches/{id}` · `POST /v1/watches/preview` · `POST /v1/watches/{id}/check` · `POST /v1/watches/{id}/read` — watched pages
+- `GET/PATCH /v1/briefing` · `POST /v1/briefing/preview` · `POST /v1/briefing/send` — morning briefing
 - `GET/POST /v1/skills` · `PUT/DELETE /v1/skills/{name}` — saved skills
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
@@ -347,6 +359,8 @@ flag False and are unchanged.
 | `SEARXNG_NEWS_ENGINES` | `bing news` | Engines for "recent news" routines (last day, then week, then a normal search) |
 | `ROUTINES_ENABLED` | `true` | Run routines on schedule; `false` leaves "run now" working |
 | `WATCHES_ENABLED` | `true` | Check watched pages on schedule; `false` leaves "check now" working |
+| `GOOGLE_CALENDAR_ICS_URL` | empty | Secret. Google Calendar's "Secret address in iCal format", for the morning briefing |
+| `HOMELAB_TRIAGE_VAR` | `../homelab-triage/var` | Host folder with the triage digest, mounted read-only for the briefing |
 | `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |

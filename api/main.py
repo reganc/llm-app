@@ -27,6 +27,8 @@ import notify
 import ollama as oll
 import refine
 import routine_runner
+import briefing
+import calendar_feed
 import search
 import telegram_chat
 import watch_runner
@@ -34,6 +36,7 @@ from admin_routes import router as admin_router
 from chat import metrics
 from chat import router as chat_router
 from config import CFG, STATIC_DIR, get_active_model
+from briefing import router as briefing_router
 from distill import router as distill_router
 from feedback import router as feedback_router
 from finetune import router as finetune_router
@@ -49,6 +52,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 notify.install_redaction()  # handlers exist now; keep the bot token out of them
+calendar_feed.install_redaction()  # and the private calendar address
 log = logging.getLogger("llm-api")
 
 
@@ -69,11 +73,12 @@ async def lifespan(app: FastAPI):
     routines_task = asyncio.create_task(routine_runner.scheduler_loop())
     watches_task = asyncio.create_task(watch_runner.scheduler_loop())
     telegram_task = asyncio.create_task(telegram_chat.loop())
+    briefing_task = asyncio.create_task(briefing.scheduler_loop())
     try:
         yield
     finally:
         await routine_runner.shutdown()
-        for t in (distill_task, refine_task, routines_task, watches_task, telegram_task):
+        for t in (distill_task, refine_task, routines_task, watches_task, telegram_task, briefing_task):
             t.cancel()
             try:
                 await t
@@ -195,6 +200,7 @@ app.include_router(routines_router)
 app.include_router(notify_router)
 app.include_router(skills_router)
 app.include_router(watches_router)
+app.include_router(briefing_router)
 
 
 # ── Health / metrics (no auth) ───────────────────────────────────────────────

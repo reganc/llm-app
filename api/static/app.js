@@ -139,6 +139,10 @@ const api = {
   tgChats: () => api.json("/v1/notify/telegram/chats"),
   tgChoose: (id) => api.json("/v1/notify/telegram/chat", { method: "POST", body: JSON.stringify({ chat_id: id }) }),
   tgOptions: (b) => api.json("/v1/notify/telegram/options", { method: "POST", body: JSON.stringify(b) }),
+  briefing: () => api.json("/v1/briefing"),
+  briefingSet: (b) => api.json("/v1/briefing", { method: "PATCH", body: JSON.stringify(b) }),
+  briefingPreview: () => api.json("/v1/briefing/preview", { method: "POST", body: "{}" }),
+  briefingSend: () => api.json("/v1/briefing/send", { method: "POST", body: "{}" }),
   tgTest: () => api.json("/v1/notify/telegram/test", { method: "POST", body: "{}" }),
   xStatus: () => api.json("/v1/search/x/status"),
   distillStatus: () => api.json("/v1/distill/status"),
@@ -793,6 +797,7 @@ async function openSettings() {
 
   await refreshXStatus();
   await refreshTelegram();
+  await refreshBriefing();
   await refreshDistillStatus();
   $("#distillRunBtn").onclick = runDistillNow;
 
@@ -995,6 +1000,40 @@ async function refreshTelegram() {
     } catch (e) { toast(apiDetail(e), "error", 6000); }
     find.disabled = false;
   };
+}
+
+async function refreshBriefing() {
+  const node = $("#briefStatus"), toggle = $("#briefToggle"), time = $("#briefTime"), out = $("#briefPreview");
+  let s;
+  try { s = await api.briefing(); } catch { node.textContent = "Status unavailable."; return; }
+  toggle.checked = s.enabled;
+  time.value = s.time;
+  const parts = [
+    s.calendar_set ? "Calendar connected." : "Calendar not set up: put Google Calendar's “Secret address in iCal format” in llm-app/.env as GOOGLE_CALENDAR_ICS_URL and recreate the api container.",
+    s.telegram_ready ? "" : "Telegram isn't connected, so it will only be saved here.",
+    s.enabled && s.next_at ? `Next: ${new Date(s.next_at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.` : "",
+    s.last ? `Last: ${new Date(s.last.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}, ${s.last.notified.replace(/\.$/, "")}.` : "",
+  ];
+  node.textContent = parts.filter(Boolean).join(" ");
+  const save = async (body) => {
+    try { await api.briefingSet(body); } catch (e) { toast(apiDetail(e), "error", 5000); }
+    await refreshBriefing();
+  };
+  toggle.onchange = () => save({ enabled: toggle.checked, time: time.value });
+  time.onchange = () => { if (time.value) save({ time: time.value }); };
+  const show = async (btn, call, done) => {
+    btn.disabled = true;
+    out.hidden = false;
+    out.textContent = "Putting it together…";
+    try { const r = await call(); out.textContent = r.text; if (done) done(r); }
+    catch (e) { out.textContent = apiDetail(e); }
+    btn.disabled = false;
+  };
+  $("#briefPreviewBtn").onclick = (e) => show(e.target, api.briefingPreview);
+  $("#briefSendBtn").onclick = (e) => show(e.target, api.briefingSend, async (r) => {
+    toast(r.notified === "sent" ? "Briefing sent" : `Saved, ${r.notified}`, r.notified === "sent" ? "success" : "info", 4000);
+    await refreshBriefing();
+  });
 }
 
 async function refreshXStatus() {

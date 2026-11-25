@@ -71,6 +71,7 @@ class Config:
     routines_enabled: bool
     routine_timezone: str
     watches_enabled: bool
+    google_calendar_ics_url: str
 
     telegram_bot_token: str
 
@@ -139,6 +140,8 @@ CFG = Config(
     routine_timezone=os.getenv("ROUTINE_TIMEZONE", "America/Chicago"),
     # Page watches (watch_runner.py). False stops the schedule.
     watches_enabled=os.getenv("WATCHES_ENABLED", "true").lower() == "true",
+    # Secret: the address alone gives read access to the calendar. Only calendar_feed reads it.
+    google_calendar_ics_url=os.getenv("GOOGLE_CALENDAR_ICS_URL", "").strip(),
     # Secret. Only notify.py uses it; the chat is chosen in Settings.
     telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
 )
