@@ -344,3 +344,14 @@ def test_model_searches_also_skip_seen_stories(env):
     finally:
         mp.undo()
     assert all(k["exclude_urls"] for k in env.kw[1:]) and len(env.kw) == 3
+
+
+def test_running_by_hand_compares_but_does_not_use_up_stories(env):
+    rid = make()
+    go(rid, "manual")
+    assert not store.get(rid).get("memory")
+    go(rid)
+    before = store.get(rid)["memory"]
+    go(rid, "manual")
+    assert env.kw[2]["exclude_urls"] == {search.norm_url("https://n.example/a")}
+    assert store.get(rid)["memory"] == before

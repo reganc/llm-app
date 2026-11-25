@@ -458,3 +458,24 @@ def test_the_model_is_told_to_keep_to_the_sources(env):
     env.payloads.clear()
     run(rr.run_routine(make(sources={"web": False, "library": False})["id"], "manual"))
     assert "own wording" not in env.payloads[0]["messages"][0]["content"]
+
+
+NEWS = {"web": True, "library": False, "news": True}
+
+
+def test_news_routines_are_told_fewer_points_are_fine(env):
+    run(rr.run_routine(make(sources=NEWS)["id"], "manual"))
+    run(rr.run_routine(make()["id"], "manual"))
+    news, other = (p["messages"][-1]["content"] for p in env.payloads)
+    assert news.startswith("Summarize AI news") and "only as many points" in news
+    assert other == "Summarize AI news"
+
+
+def test_one_page_cannot_fill_a_news_report(env):
+    env.replies = ["- Answer claim [W1].\n- First claim [W1].\n- Later claim [W1].\n- fine answer [W2]."] * 2
+    r, other = make(sources=NEWS), make()
+    run(rr.run_routine(r["id"], "manual"))
+    run(rr.run_routine(other["id"], "manual"))
+    assert "Later" not in last(r)["content"] and last(r)["status"] == "ok"
+    assert last(r)["note"] == "1 more from the same page left out."
+    assert "Later" in last(other)["content"]

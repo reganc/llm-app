@@ -57,6 +57,10 @@ _FAITHFUL = (
     "result has only a line or two of text, report just what it says."
 )
 
+_FEWER = ("\n\n(Write one point per story, and only as many points as there are stories in the "
+          "results that fit this task, even if it asks for more. Leave out anything that does "
+          "not fit instead of relating it to the topic yourself.)")
+
 _ONLY_NEW = (
     " Report only what is new or has changed since the earlier reports below. Take every "
     "fact you report from the search results, not from the earlier reports. If nothing is "
@@ -139,7 +143,8 @@ def _messages(routine: dict, block: str | None, tools: list[dict],
             {"role": "assistant", "content": "Understood. I'll cite a marker for every fact "
                                              "and say so if the answer isn't there."},
         ]
-    return [*messages, {"role": "user", "content": routine["prompt"]}]
+    task = routine["prompt"] + (_FEWER if routine["sources"].get("news") else "")
+    return [*messages, {"role": "user", "content": task}]
 
 
 def _cited(content: str, trace: agent.Trace) -> list[dict]:
@@ -152,23 +157,31 @@ def _cited(content: str, trace: agent.Trace) -> list[dict]:
     return list(out.values())
 
 
-def _outcome(content: str, trace: agent.Trace, *, web: bool, tools: bool) -> dict:
+def _outcome(content: str, trace: agent.Trace, *, web: bool, tools: bool,
+             topic: str | None = None) -> dict:
+    """`topic` is what a news routine searches for, None for other routines."""
     status, notes, removed = "ok", [], []
     if web and not trace.web_results:
         status = "unsourced"
         notes.append("Web search returned no results, so this answer is not backed by "
                      "current sources.")
     elif tools:
-        checked = routine_check.check(content, trace.texts, trace.previews)
+        pages = {m: search.norm_url(s["url"]) for m, s in trace.sources.items()}
+        checked = routine_check.check(
+            content, trace.texts, trace.previews, pages if topic else None,
+            search.topic_pattern(topic) if topic else None)
         if not checked.enough:
             status = "unsourced"
         if not checked.kept:  # shown as written, under the unsourced label
             notes.append("No part of the answer could be matched to a source it cites.")
         else:
             content, removed = checked.content, checked.removed
-        if checked.kept and removed:
-            notes.append(f"{len(removed)} of {checked.total} points were removed because "
-                         "they could not be matched to a source.")
+        unmatched = checked.total - checked.kept
+        if checked.kept and unmatched:
+            notes.append(f"{unmatched} of {checked.total} points were removed because "
+                         "their sources don't back them.")
+        if checked.extra:
+            notes.append(f"{checked.extra} more from the same page left out.")
     sources = _cited(content, trace)
     x = x_search.status()  # X posts are part of every web search when it works
     if web and x["enabled"] and not x["ready"]:
@@ -214,7 +227,8 @@ async def _execute(routine: dict) -> dict:
         return {"status": "error", "error": "The model returned an empty answer."}
     if memory["reports"] and _is_nothing_new(content):
         return _unchanged("Nothing new since the last report.", trace)
-    out = _outcome(content, trace, web=web, tools=bool(tools))
+    out = _outcome(content, trace, web=web, tools=bool(tools),
+                   topic=routine_query.effective(routine) if news else None)
     if data.get("done_reason") == "length":
         out["note"] = f"{out['note'] or ''} The answer was cut off at the length limit.".strip()
     return out
@@ -241,7 +255,8 @@ async def run_routine(routine_id: str, trigger: str) -> None:
             fields = {"status": "error", "error": f"{type(e).__name__}: {e}"[:300]}
         store.finish_run(routine_id, run["id"], fields)
         log.info("routine %s (%s): %s", routine_id, trigger, fields["status"])
-        _remember(routine, fields)
+        if trigger == "schedule":  # trying a routine by hand must not use up its stories
+            _remember(routine, fields)
     previous = next((r["status"] for r in routine["runs"] if r["status"] != "running"), None)
     await _notify(routine, {**run, **fields}, previous)
 

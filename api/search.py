@@ -386,6 +386,18 @@ def _foreign_script(title: str) -> bool:
     return sum(c > "\u024f" for c in letters) * 2 > len(letters)
 
 
+def topic_pattern(query: str) -> re.Pattern | None:
+    """Matches text that mentions what the query is about (its words, minus ones
+    like "latest" and "news"), or None if nothing is left."""
+    terms = [w for w in re.findall(r"\w+", query.lower()) if w not in _TOPIC_STOP]
+    terms += [a for w in terms for a in _TOPIC_ALIASES.get(w, ())]
+    if not terms:
+        return None
+    # Short words must match whole ("ai" is not "aid"); longer ones may be inflected.
+    return re.compile("|".join(rf"(?<!\w){re.escape(w)}" + ("" if len(w) > 3 else r"(?!\w)")
+                               for w in terms), re.IGNORECASE)
+
+
 def _on_topic(results: list[dict], query: str) -> list[dict]:
     """Leave out stories that mention no word of the query or are in another script,
     when enough others are left. ("Technology news" stories rarely say "technology":
@@ -393,13 +405,9 @@ def _on_topic(results: list[dict], query: str) -> list[dict]:
     if query.isascii():  # a page the reader can't read, and no point can be matched to
         readable = [r for r in results if not _foreign_script(r.get("title", ""))]
         results = readable if len(readable) >= _MIN_ON_TOPIC else results
-    terms = [w for w in re.findall(r"\w+", query.lower()) if w not in _TOPIC_STOP]
-    terms += [a for w in terms for a in _TOPIC_ALIASES.get(w, ())]
-    if not terms:
+    pattern = topic_pattern(query)
+    if pattern is None:
         return results
-    # Short words must match whole ("ai" is not "aid"); longer ones may be inflected.
-    pattern = re.compile("|".join(rf"(?<!\w){re.escape(w)}" + ("" if len(w) > 3 else r"(?!\w)")
-                                  for w in terms), re.IGNORECASE)
     matching = [r for r in results
                 if pattern.search(f"{r.get('title', '')} {r.get('snippet', '')}")]
     return matching if len(matching) >= _MIN_ON_TOPIC else results

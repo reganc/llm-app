@@ -208,7 +208,10 @@ and the run is `ok` only if at least half the points remain, else `unsourced` an
 not notified. Quotation marks must hold the source's exact words (a long wrong quote
 drops its point, a short one loses its marks). News stories whose page could be read
 come first; a point resting only on search previews is labelled, as is the source
-(`Trace.previews`). It can't catch a claim that rewords a page it does match. One run at a time; the next run time is saved before a
+(`Trace.previews`). For news, at most two points may rest on one page, and a point that
+ties an unrelated part of a page to the topic is removed (`_invented_link`, tuned on 40
+recorded runs to remove no good point). Only scheduled runs add to a routine's memory, so
+trying it by hand doesn't use up stories. It can't catch a claim that rewords a page it does match. One run at a time; the next run time is saved before a
 run starts; a run found more than an hour late is recorded as `missed`, never
 caught up. Stored as JSON in `DATA_DIR/routines/` (30 runs kept each).
 **Only what's new** (`only_new`): a routine remembers the URLs and text of its

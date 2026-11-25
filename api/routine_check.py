@@ -5,7 +5,8 @@ cite a source, and enough of its words must appear in the text the model was
 given for that source. This catches points with no source and points pinned to
 an unrelated page. Quotation marks must hold the source's exact words: a long quote
 that doesn't is removed with its point, a short one loses its marks. Points resting
-only on search previews are labelled.
+only on search previews are labelled. For news, a page can back only a few points,
+and a point that ties an unrelated part of a page to the topic is removed.
 
 It can't tell a subtly wrong claim from a right one,
 and it can't match a point to a page in another language.
@@ -23,6 +24,12 @@ _STEM = 5
 # A wrong quote this short is wording ("flimsy guardrails"), not a claimed statement.
 _SHORT_QUOTE_WORDS = 4
 _PREVIEW_LABEL = "(search preview only)"
+# For news: one page can't fill a whole report.
+_MAX_PER_PAGE = 2
+# A page where more of the passages than this mention the topic is about the topic.
+_ON_TOPIC_SHARE = 0.4
+# Share of a clause's words that its page must contain for a link to the topic to stand.
+_MIN_LINK_OVERLAP = 0.67
 _MAX_REMOVED, _REMOVED_CHARS = 20, 400
 
 _ITEM = re.compile(r"^(\s*)(?:[-*•+]|\d{1,2}[.)])\s+\S")
@@ -52,8 +59,9 @@ class _Block:
 class Checked:
     content: str                   # the kept points ("" if none)
     kept: int
-    total: int
+    total: int                     # kept or not backed (`extra` points don't count)
     removed: list[dict]            # {"text", "reason"}
+    extra: int = 0                 # of `removed`, backed but over the limit for one page
 
     @property
     def enough(self) -> bool:
@@ -142,10 +150,50 @@ def _check_quotes(b: _Block, source: str) -> None:
         b.lines = fixed.splitlines()
 
 
+def _invented_link(text: str, source: str, topic: re.Pattern) -> bool:
+    """Whether a point ties something to the topic that its source doesn't: the page
+    is mostly about other things, the passage nearest the point doesn't mention the
+    topic, and the clause that does isn't made of the page's words."""
+    claim = _plain(text)
+    if not topic.search(claim):
+        return False
+    passages = [p for p in re.split(r"\n+|\[…\]|(?<=[.!?])[\"”’]?\s+", source) if p.strip()]
+    if not passages or sum(bool(topic.search(p)) for p in passages) >= _ON_TOPIC_SHARE * len(passages):
+        return False
+    words = _tokens(claim)
+    if topic.search(max(passages, key=lambda p: len(words & _tokens(p)))):
+        return False
+    known = _tokens(source)
+    for clause in re.split(r"[,;:]\s+|\s[–—-]\s|\.\s+", claim):
+        link = _tokens(topic.sub(" ", clause))
+        if topic.search(clause) and len(link) > 2 and len(link & known) / len(link) < _MIN_LINK_OVERLAP:
+            return True
+    return False
+
+
+def _limit_per_page(points: list[_Block], pages: dict[str, str]) -> int:
+    """Drop backed points whose every page already has its share. Returns how many."""
+    used: dict[str, int] = {}
+    dropped = 0
+    for b in points:
+        if b.reason:
+            continue
+        cited = {pages.get(m, m) for m in agent.cited_markers(b.text)}
+        if all(used.get(p, 0) >= _MAX_PER_PAGE for p in cited):
+            b.reason = f"more than {_MAX_PER_PAGE} points from one page"
+            dropped += 1
+            continue
+        for p in cited:
+            used[p] = used.get(p, 0) + 1
+    return dropped
+
+
 def check(content: str, texts: dict[str, str],
-          previews: set[str] | frozenset[str] = frozenset()) -> Checked:
+          previews: set[str] | frozenset[str] = frozenset(),
+          pages: dict[str, str] | None = None, topic: re.Pattern | None = None) -> Checked:
     """`texts` is marker -> the text the model was given for it; `previews` the
-    markers where that is only a search preview."""
+    markers where that is only a search preview. With `pages` (marker -> page),
+    only a few points may rest on the same page. `topic` matches text about the topic."""
     blocks = _blocks(content)
     points = [b for b in blocks if b.kind != "frame"]
     for b in points:
@@ -154,10 +202,13 @@ def check(content: str, texts: dict[str, str],
             b.reason = "no source cited"
         elif not _backed(b.text, cited, texts):
             b.reason = "could not be matched to the cited source"
+        elif topic and _invented_link(b.text, "\n".join(texts.get(m, "") for m in cited), topic):
+            b.reason = "links it to the topic in a way its source does not"
         else:
             _check_quotes(b, "\n".join(texts.get(m, "") for m in cited))
             if b.reason is None and all(m in previews for m in cited):
                 b.lines = [*b.lines[:-1], f"{b.lines[-1].rstrip()} {_PREVIEW_LABEL}"]
+    extra = _limit_per_page(points, pages) if pages is not None else 0
     kept: list[_Block] = []
     for i, b in enumerate(blocks):
         if b.kind == "frame":                # a heading stays if something under it does
@@ -173,7 +224,7 @@ def check(content: str, texts: dict[str, str],
     removed = [{"text": " ".join(_plain(b.text).split())[:_REMOVED_CHARS], "reason": b.reason}
                for b in points if b.reason]
     n = len(points) - len(removed)
-    return Checked(_join(kept) if n else "", n, len(points), removed[:_MAX_REMOVED])
+    return Checked(_join(kept) if n else "", n, len(points) - extra, removed[:_MAX_REMOVED], extra)
 
 
 def _join(blocks: list[_Block]) -> str:
