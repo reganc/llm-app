@@ -227,6 +227,15 @@
           <div id="xStatus" class="muted">…</div>
         </div>
         <div class="field">
+          <label>Telegram notifications</label>
+          <div id="tgStatus" class="muted">…</div>
+          <div class="tg-actions">
+            <button type="button" id="tgFindBtn" class="ghost-btn" formnovalidate hidden>Find my chat</button>
+            <button type="button" id="tgTestBtn" class="ghost-btn" formnovalidate hidden>Send a test</button>
+          </div>
+          <div id="tgChats" class="tg-actions"></div>
+        </div>
+        <div class="field">
           <label>Knowledge distillation</label>
           <div id="distillStatus" class="muted-small">…</div>
           <div class="distill-actions">
@@ -323,6 +332,11 @@
 
   <template id="routineFormTpl">
     <form class="routine-form">
+      <div class="draft-note" hidden>
+        <p><strong></strong> Filled in from your message. Nothing is saved until you press Save.</p>
+        <ul></ul>
+        <button type="button" class="ghost-btn send-instead" hidden>Not a routine, send as a message</button>
+      </div>
       <label class="field"><span>Name</span>
         <input name="name" required maxlength="80" placeholder="Morning AI news" autocomplete="off" /></label>
       <label class="field"><span>What should it do?</span>
@@ -336,6 +350,8 @@
         <label><input type="checkbox" name="news" /> Recent news only (last day, then last week)</label></div>
       <label class="field query-field"><span>Search for <small class="muted">(optional, defaults to the task)</small></span>
         <input name="query" maxlength="300" placeholder="AI news today" autocomplete="off" /></label>
+      <div class="check-row">
+        <label><input type="checkbox" name="only_new" /> Only tell me what's new since earlier results</label></div>
       <div class="field-grid">
         <label class="field"><span>Repeat</span>
           <select name="kind"><option value="daily">On certain days</option><option value="interval">Every few hours</option></select></label>
@@ -348,6 +364,10 @@
       </div>
       <label class="field interval-fields"><span>Every how many hours?</span>
         <input type="number" name="hours" min="1" max="168" required /></label>
+      <label class="field"><span>Telegram</span>
+        <select name="notify"><option value="off">Don't notify me</option><option value="headline">Headline only</option><option value="full">Full result</option></select>
+        <small class="muted notify-hint">Telegram isn't connected yet. Set it up in Settings.</small>
+        <small class="muted notify-full-hint">The whole result goes through Telegram's servers, including anything quoted from your library.</small></label>
       <div class="modal-actions">
         <button type="button" class="ghost-btn cancel">Cancel</button>
         <button type="submit" class="primary-btn">Save</button>

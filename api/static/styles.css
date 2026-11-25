@@ -675,6 +675,14 @@ button.badge.clickable:active { transform: translateY(1px); }
 }
 .routine-form .field > span { font-size: 12px; color: var(--text-2); font-weight: 500; }
 .routine-form textarea { resize: vertical; width: 100%; }
+.draft-note {
+  border: 1px solid rgba(124, 92, 255, 0.4); border-radius: var(--radius);
+  background: var(--accent-soft); padding: 12px 14px; font-size: 13px;
+}
+.draft-note ul { margin: 6px 0 0 18px; color: var(--amber); }
+.draft-note .send-instead { margin-top: 10px; font-size: 12px; }
+.tg-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.tg-actions .ghost-btn { font-size: 12px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .daily-fields { display: flex; flex-wrap: wrap; gap: 14px; }
 .check-row { display: flex; gap: 18px; flex-wrap: wrap; }

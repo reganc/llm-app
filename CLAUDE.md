@@ -43,6 +43,8 @@ llm-app/
 │   ├── routine_runner.py       # routine scheduler + execution
 │   ├── routine_store.py        # routines + run history (JSON files)
 │   ├── routine_schedule.py     # when a routine runs
+│   ├── routine_draft.py        # plain language → routine to confirm
+│   ├── notify.py               # Telegram notifications
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
 │   ├── chat.py                 # /v1/chat/completions, /reasoning, /conversations
@@ -144,6 +146,7 @@ Coverage:
 | `test_agent_endpoint.py` | agent mode on `/v1/chat/completions` — opt-in/out, bypasses (response_format, raw, /commands, library mode), metadata, `store:false`, SSE event order |
 | `test_x_search.py` | X failures are typed (expired login, rate limit, timeout), never "no results"; dead login skipped in background; `/x` falls back to the web and says so |
 | `test_routine_schedule.py` · `test_routine_store.py` · `test_routine_runner.py` · `test_routines_api.py` | routines: DST/weekday math, atomic bounded storage, crash recovery, missed-run skip, one run at a time, source mapping, unsourced labelling, API |
+| `test_routine_memory.py` · `test_notify.py` · `test_routine_draft.py` · `test_routine_phrases.py` | only-what's-new, Telegram (content rules, retries, token redaction), plain-language drafts, chat phrase detection (needs node) |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
@@ -197,6 +200,22 @@ citations that map to results a tool really returned (`Trace.sources`),
 otherwise `unsourced`. One run at a time; the next run time is saved before a
 run starts; a run found more than an hour late is recorded as `missed`, never
 caught up. Stored as JSON in `DATA_DIR/routines/` (30 runs kept each).
+**Only what's new** (`only_new`): a routine remembers the URLs and text of its
+sourced results. For news, reported stories are dropped from every search in code
+(`search.norm_url`, `same_headline`); if nothing is left the run is `unchanged`
+without a model call, and the model never sees its earlier reports (shown them,
+it repeated an old story under a wrong citation). Pages that change in place are
+compared by the model with its last 3 reports. Either way it may answer
+`NOTHING_NEW`. `unchanged` runs are never unread or notified. Editing the task
+drops the memory. **Telegram** (`notify.py`): scheduled runs only, plain text,
+first of a row of failures only; a headline quotes the answer only for
+web-only routines, so library content leaves the machine only with `full`. The
+bot token is in every Telegram URL and httpx logs URLs, so `RedactToken` filters
+it from logs: never log a Telegram URL or exception. **Drafts**
+(`routine_draft.py`, `/routine …` or "every weekday at 7, …" in chat): code reads
+the schedule from the user's words and warns about anything assumed; the model
+only tidies wording, which is discarded if it adds a name or number; the user
+always confirms in the form.
 
 **Evals** (`evals/`, see its README): 29 golden cases scored against the live
 stack — `python evals/run.py [--mode stream] [--compare <results.json>]`.
@@ -247,7 +266,8 @@ flag False and are unchanged.
 - `GET/POST/DELETE /v1/search/auxiliary-sites` — Manage sites always fetched alongside searches
 - `GET  /v1/search/x/status` · `POST /v1/search/x` — X/Twitter search
 - `GET  /v1/memory/stats` · `GET /v1/memory/search` · `DELETE /v1/memory/source/{id}` · `POST /v1/memory/ingest` · `POST /v1/memory/wipe`
-- `GET/POST /v1/routines` · `GET/PATCH/DELETE /v1/routines/{id}` · `POST /v1/routines/{id}/run` · `GET /v1/routines/inbox` · `POST /v1/routines/inbox/read` · `POST /v1/routines/{id}/runs/{run_id}/read` — scheduled tasks and their results
+- `GET/POST /v1/routines` · `GET/PATCH/DELETE /v1/routines/{id}` · `POST /v1/routines/draft` · `POST /v1/routines/{id}/run` · `POST /v1/routines/{id}/forget` · `GET /v1/routines/inbox` · `POST /v1/routines/inbox/read` · `POST /v1/routines/{id}/runs/{run_id}/read` — scheduled tasks and their results
+- `GET /v1/notify/telegram/status` · `GET …/chats` · `POST …/chat` · `POST …/test` — Telegram setup
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
@@ -282,6 +302,7 @@ flag False and are unchanged.
 | `SEARXNG_FALLBACK_ENGINES` | `bing,google,brave` | Asked only when the primary engines return nothing (Bing outranks better engines with off-topic hits when mixed in). Empty disables |
 | `SEARXNG_NEWS_ENGINES` | `bing news` | Engines for "recent news" routines (last day, then week, then a normal search) |
 | `ROUTINES_ENABLED` | `true` | Run routines on schedule; `false` leaves "run now" working |
+| `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |
 | `X_CLI_SRC` | `~/x-cli` | x-cli source checkout used at image build (its GitHub repo is gone) |

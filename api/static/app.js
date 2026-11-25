@@ -1,6 +1,7 @@
 // Local AI — single-page app
 // No build step, no framework. Vanilla ES modules.
 import { escHtml, renderMd } from "./md.js";
+import { routineRequest } from "./routine-phrases.js";
 import { initRoutines } from "./routines.js";
 
 // ─────────────────────── State ───────────────────────
@@ -133,6 +134,10 @@ const api = {
   auxList: () => api.json("/v1/search/auxiliary-sites"),
   auxAdd: (url) => api.json("/v1/search/auxiliary-sites", { method: "POST", body: JSON.stringify({ url }) }),
   auxRemove: (url) => api.json(`/v1/search/auxiliary-sites?url=${encodeURIComponent(url)}`, { method: "DELETE" }),
+  tgStatus: () => api.json("/v1/notify/telegram/status"),
+  tgChats: () => api.json("/v1/notify/telegram/chats"),
+  tgChoose: (id) => api.json("/v1/notify/telegram/chat", { method: "POST", body: JSON.stringify({ chat_id: id }) }),
+  tgTest: () => api.json("/v1/notify/telegram/test", { method: "POST", body: "{}" }),
   xStatus: () => api.json("/v1/search/x/status"),
   distillStatus: () => api.json("/v1/distill/status"),
   distillRun: () => api.json("/v1/distill/run", { method: "POST", body: "{}" }),
@@ -358,8 +363,15 @@ async function deleteConv(id) {
 }
 
 // ─────────────────────── Send message (streaming) ───────────────────────
-async function sendMessage(text) {
+async function sendMessage(text, { asMessage = false } = {}) {
   if (!text.trim() || State.streaming) return;
+  const routine = asMessage ? null : routineRequest(text);
+  if (routine) {
+    $("#composerInput").value = "";
+    autoresize($("#composerInput"));
+    return Routines.openDraft(routine.text,
+      routine.explicit ? null : () => sendMessage(text, { asMessage: true }));
+  }
   const userMsg = { role: "user", content: text };
   State.thread.push(userMsg);
   const assistant = { role: "assistant", content: "", streaming: true };
@@ -778,6 +790,7 @@ async function openSettings() {
   $("#settingApiKey").value = State.apiKey;
 
   await refreshXStatus();
+  await refreshTelegram();
   await refreshDistillStatus();
   $("#distillRunBtn").onclick = runDistillNow;
 
@@ -930,6 +943,45 @@ function renderLastSearch() {
     ]);
     list.appendChild(card);
   }
+}
+
+const apiDetail = (e) => {
+  try { return JSON.parse(e.message.slice(e.message.indexOf("{"))).detail || e.message; } catch { return e.message; }
+};
+
+async function refreshTelegram() {
+  const node = $("#tgStatus"), find = $("#tgFindBtn"), test = $("#tgTestBtn"), list = $("#tgChats");
+  list.replaceChildren();
+  let s;
+  try { s = await api.tgStatus(); } catch { node.textContent = "Status unavailable."; return; }
+  node.textContent = s.ready ? "Connected."
+    : s.token_set ? "Open your bot in Telegram, press Start, then choose your chat."
+    : "Not set up: put TELEGRAM_BOT_TOKEN in llm-app/.env and recreate the api container.";
+  find.hidden = !s.token_set;
+  find.textContent = s.chat_set ? "Change chat" : "Find my chat";
+  test.hidden = !s.ready;
+  test.onclick = async () => {
+    test.disabled = true;
+    try { await api.tgTest(); toast("Test sent", "success", 2000); }
+    catch (e) { toast(apiDetail(e), "error", 6000); }
+    test.disabled = false;
+  };
+  find.onclick = async () => {
+    find.disabled = true;
+    try {
+      const { chats } = await api.tgChats();
+      list.replaceChildren(...chats.map(c => el("button", {
+        type: "button", class: "ghost-btn",
+        text: `Use ${c.name || "chat"}${c.username ? ` (@${c.username})` : ""}`,
+        onclick: async () => {
+          try { await api.tgChoose(c.id); toast("Telegram chat saved", "success", 2000); await refreshTelegram(); }
+          catch (e) { toast(apiDetail(e), "error", 6000); }
+        },
+      })));
+      if (!chats.length) toast("No messages yet. Send your bot any message, then try again.", "info", 5000);
+    } catch (e) { toast(apiDetail(e), "error", 6000); }
+    find.disabled = false;
+  };
 }
 
 async function refreshXStatus() {
@@ -1208,6 +1260,7 @@ const PALETTE_COMMANDS = [
   { ico: "𝕏", label: "Search X / Twitter", desc: "/x <q>", run: () => prefillComposer("/x ") },
   { ico: "📚", label: "Library", desc: "search, read, manage saved sources", run: () => openLibrary() },
   { ico: "⏱", label: "Routines", desc: "scheduled tasks and their results", run: () => Routines.open() },
+  { ico: "⏱", label: "New routine from a sentence", desc: "/routine <what and when>", run: () => prefillComposer("/routine ") },
   { ico: "⚙", label: "Settings", desc: "model, prompts, key", run: () => openSettings() },
 ];
 

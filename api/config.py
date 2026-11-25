@@ -71,6 +71,8 @@ class Config:
     routines_enabled: bool
     routine_timezone: str
 
+    telegram_bot_token: str
+
 
 def _csv(name: str, default: str) -> list[str]:
     return [s.strip() for s in os.getenv(name, default).split(",") if s.strip()]
@@ -134,6 +136,8 @@ CFG = Config(
     # API and "run now" keep working.
     routines_enabled=os.getenv("ROUTINES_ENABLED", "true").lower() == "true",
     routine_timezone=os.getenv("ROUTINE_TIMEZONE", "America/Chicago"),
+    # Secret. Only notify.py uses it; the chat is chosen in Settings.
+    telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

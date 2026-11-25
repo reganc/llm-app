@@ -153,6 +153,8 @@ services:
       # Scheduled routines (false stops the schedule; "run now" still works)
       - ROUTINES_ENABLED=${ROUTINES_ENABLED:-true}
       - ROUTINE_TIMEZONE=${ROUTINE_TIMEZONE:-America/Chicago}
+      # Optional: Telegram notifications for routines (choose the chat in Settings)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       # Web search
       - SEARCH_ENABLED=true
       - SEARCH_ALWAYS=false

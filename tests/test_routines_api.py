@@ -112,3 +112,57 @@ def test_inbox_and_read(c):
     assert c.get("/v1/routines/inbox", headers=AUTH).json()["unread"] == 0
     assert c.post("/v1/routines/inbox/read", headers=AUTH).json() == {"marked": 0}
     assert c.get("/v1/routines/inbox?limit=0", headers=AUTH).status_code == 422
+
+
+def test_new_options_round_trip_and_validate(c):
+    r = c.post("/v1/routines", json={**BODY, "only_new": True, "notify": "headline"}, headers=AUTH).json()
+    assert r["only_new"] is True and r["notify"] == "headline" and "memory" not in r
+    d = c.post("/v1/routines", json=BODY, headers=AUTH).json()
+    assert d["only_new"] is False and d["notify"] == "off"
+    for bad in ({"notify": "sms"}, {"only_new": "maybe"}):
+        assert c.post("/v1/routines", json={**BODY, **bad}, headers=AUTH).status_code == 422
+    for f in ("only_new", "notify"):
+        assert c.patch(f"/v1/routines/{r['id']}", json={f: None}, headers=AUTH).status_code == 422
+
+
+@pytest.mark.parametrize("patch,kept", [
+    ({"name": "x"}, True), ({"notify": "off"}, True), ({"enabled": False}, True),
+    ({"schedule": {"kind": "interval", "hours": 2}}, True),
+    ({"prompt": "Other"}, False), ({"query": "other"}, False),
+    ({"sources": {"web": False}}, False), ({"prompt": BODY["prompt"]}, True),
+])
+def test_changing_the_task_forgets_earlier_reports(c, patch, kept):
+    rid = c.post("/v1/routines", json=BODY, headers=AUTH).json()["id"]
+    store.update(rid, {"memory": {"urls": ["u"], "reports": []}})
+    c.patch(f"/v1/routines/{rid}", json=patch, headers=AUTH)
+    assert bool(store.get(rid).get("memory")) is kept
+
+
+def test_memory_is_private_and_can_be_cleared(c):
+    rid = c.post("/v1/routines", json=BODY, headers=AUTH).json()["id"]
+    store.update(rid, {"memory": {"urls": ["u"], "reports": []}})
+    got = c.get(f"/v1/routines/{rid}", headers=AUTH).json()
+    assert "memory" not in got and got["remembers"] == 1
+    assert c.post(f"/v1/routines/{rid}/forget", headers=AUTH).status_code == 200
+    assert c.get(f"/v1/routines/{rid}", headers=AUTH).json()["remembers"] == 0
+    assert c.post("/v1/routines/nope/forget", headers=AUTH).status_code == 404
+
+
+def test_old_routine_files_still_work(c):
+    rid = c.post("/v1/routines", json=BODY, headers=AUTH).json()["id"]
+    old = {k: v for k, v in store._routines[rid].items() if k not in ("only_new", "notify", "memory")}
+    store._routines[rid] = old
+    got = c.get("/v1/routines", headers=AUTH).json()["routines"][0]
+    assert got["only_new"] is False and got["notify"] == "off"
+
+
+def test_draft_endpoint(c, monkeypatch):
+    async def fake(text):
+        return {"routine": {"name": text}, "warnings": []}
+    monkeypatch.setattr(routines.routine_draft, "draft", fake)
+    assert c.post("/v1/routines/draft", json={"text": "every day"}).status_code == 401
+    assert c.post("/v1/routines/draft", json={"text": " "}, headers=AUTH).status_code == 422
+    assert c.post("/v1/routines/draft", json={"text": "x" * 2001}, headers=AUTH).status_code == 422
+    r = c.post("/v1/routines/draft", json={"text": "every day do x"}, headers=AUTH)
+    assert r.json()["routine"]["name"] == "every day do x"
+    assert c.get("/v1/routines", headers=AUTH).json()["routines"] == []   # nothing saved

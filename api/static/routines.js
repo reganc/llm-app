@@ -13,6 +13,7 @@ const STATUS = {
   error: ["Failed", "bad"],
   interrupted: ["Interrupted", "bad"],
   missed: ["Missed", "warn"],
+  unchanged: ["Nothing new", ""],
   running: ["Running…", "live"],
 };
 
@@ -54,9 +55,12 @@ export function initRoutines({ $, el, api, toast }) {
     remove: (id) => api.json(`/v1/routines/${id}`, { method: "DELETE" }),
     run: (id) => api.json(`/v1/routines/${id}/run`, { method: "POST", body: "{}" }),
     read: (id, run) => api.json(`/v1/routines/${id}/runs/${run}/read`, { method: "POST", body: "{}" }),
+    forget: (id) => api.json(`/v1/routines/${id}/forget`, { method: "POST", body: "{}" }),
+    draft: (text) => api.json("/v1/routines/draft", { method: "POST", body: JSON.stringify({ text }) }),
+    telegram: () => api.json("/v1/notify/telegram/status"),
     readAll: () => api.json("/v1/routines/inbox/read", { method: "POST", body: "{}" }),
   };
-  // view: {name:"inbox"} | {name:"routine", id} | {name:"edit", id|null}
+  // view: {name:"inbox"} | {name:"routine", id} | {name:"edit", id|null, draft?}
   const state = { routines: [], unread: 0, tz: "", scheduler: true, view: { name: "inbox" }, timer: 0 };
   const modal = $("#routinesModal");
   const detail = $("#routinesDetail");
@@ -139,6 +143,9 @@ export function initRoutines({ $, el, api, toast }) {
       ]),
     ];
     if (run.error) children.push(el("p", { class: "run-note bad", text: run.error }));
+    if (run.notified?.startsWith("failed")) {
+      children.push(el("p", { class: "run-note", text: `Telegram notification ${run.notified}` }));
+    }
     if (run.note) children.push(el("p", { class: "run-note", text: run.note }));
     if (run.content) children.push(body);
     if (sources.length) children.push(el("details", { class: "run-sources" }, [
@@ -217,6 +224,13 @@ export function initRoutines({ $, el, api, toast }) {
       }),
       remove,
     ];
+    if (r.remembers) {
+      actions.splice(3, 0, btn("Forget earlier results", async () => {
+        try { await call.forget(r.id); toast("It will compare from scratch", "success", 1800); await refresh(); }
+        catch (e) { fail("Could not clear", e); }
+      }));
+    }
+    const extras = [r.only_new && "only new", r.notify !== "off" && `Telegram ${r.notify}`].filter(Boolean);
     const tools = [r.sources.web && (r.sources.news ? "recent news" : "web"), r.sources.library && "library"].filter(Boolean).join(" + ") || "no tools";
     const next = r.enabled ? `next ${fmtWhen(r.next_run_at)}` : "paused";
     const body = el("div", { class: "library-content run-list" }, [
@@ -224,12 +238,13 @@ export function initRoutines({ $, el, api, toast }) {
     ]);
     if (!r.runs.length) body.append(el("p", { class: "muted", text: "No results yet. Use Run now to try it." }));
     for (const run of r.runs) body.append(runCard(run, { routineId: r.id }));
-    detail.replaceChildren(head(r.name, `${describeSchedule(r.schedule)} (${r.timezone}) · ${next} · ${tools}`, actions), body);
+    detail.replaceChildren(head(r.name, `${describeSchedule(r.schedule)} (${r.timezone}) · ${[next, tools, ...extras].join(" · ")}`, actions), body);
   }
 
   // ── form ───────────────────────────────────────────────────────────────────
   async function renderForm(view) {
-    const r = view.id ? await call.get(view.id) : null;
+    const r = view.id ? await call.get(view.id) : view.draft?.routine || null;
+    const telegram = await call.telegram().catch(() => ({ ready: false }));
     if (state.view !== view) return;
     const form = $("#routineFormTpl").content.firstElementChild.cloneNode(true);
     const f = (name) => form.elements[name];
@@ -249,15 +264,29 @@ export function initRoutines({ $, el, api, toast }) {
     f("web").checked = r ? r.sources.web : true;
     f("library").checked = r ? r.sources.library : false;
     f("news").checked = !!r?.sources.news;
+    f("only_new").checked = !!r?.only_new;
+    f("notify").value = r?.notify || "off";
+    form.querySelector(".notify-hint").hidden = telegram.ready;
+    form.querySelector(".notify-full-hint").hidden = true;
+    if (view.draft) {
+      const box = form.querySelector(".draft-note");
+      box.hidden = false;
+      box.querySelector("strong").textContent = `${describeSchedule(r.schedule)}.`;
+      box.querySelector("ul").replaceChildren(...view.draft.warnings.map(w => el("li", { text: w })));
+      const send = form.querySelector(".send-instead");
+      send.hidden = !view.draft.sendInstead;
+      send.onclick = () => { modal.close(); view.draft.sendInstead(); };
+    }
     const sync = () => {
       form.querySelector(".daily-fields").hidden = f("kind").value !== "daily";
       form.querySelector(".interval-fields").hidden = f("kind").value !== "interval";
       form.querySelectorAll(".query-field").forEach(n => { n.hidden = !f("web").checked; });
+      form.querySelector(".notify-full-hint").hidden = f("notify").value !== "full";
       f("hours").disabled = f("kind").value !== "interval";
     };
-    f("kind").onchange = f("web").onchange = sync;
+    f("kind").onchange = f("web").onchange = f("notify").onchange = sync;
     sync();
-    form.querySelector(".cancel").onclick = () => show(r ? { name: "routine", id: r.id } : { name: "inbox" });
+    form.querySelector(".cancel").onclick = () => show(view.id ? { name: "routine", id: view.id } : { name: "inbox" });
     form.onsubmit = async (e) => {
       e.preventDefault();
       const days = [...form.querySelectorAll("input[name=day]:checked")].map(x => +x.value);
@@ -271,17 +300,19 @@ export function initRoutines({ $, el, api, toast }) {
         schedule: daily ? { kind: "daily", time: f("time").value, days }
           : { kind: "interval", hours: parseInt(f("hours").value, 10) },
         sources: { web: f("web").checked, library: f("library").checked, news: f("news").checked },
+        only_new: f("only_new").checked,
+        notify: f("notify").value,
       };
       const save = form.querySelector("[type=submit]");
       save.disabled = true;
       try {
-        const saved = r ? await call.update(r.id, body) : await call.create(body);
-        toast(r ? "Routine saved" : "Routine created", "success", 1800);
+        const saved = view.id ? await call.update(view.id, body) : await call.create(body);
+        toast(view.id ? "Routine saved" : "Routine created", "success", 1800);
         await show({ name: "routine", id: saved.id });
       } catch (err) { save.disabled = false; fail("Could not save", err); }
     };
-    detail.replaceChildren(head(r ? "Edit routine" : "New routine",
-      "Runs on its own with read-only tools. It can search and summarize; it cannot send or change anything."), form);
+    detail.replaceChildren(head(view.id ? "Edit routine" : view.draft ? "Check this routine" : "New routine",
+      "Runs on its own with read-only tools. It can search, summarize and notify you. It cannot change anything or contact anyone else."), form);
     f("name").focus();
   }
 
@@ -298,7 +329,7 @@ export function initRoutines({ $, el, api, toast }) {
 
   async function refresh() {
     try { await refreshList(); } catch (e) { fail("Routines unavailable", e); }
-    if (state.view.name !== "edit") await renderView();
+    if (!["edit", "drafting"].includes(state.view.name)) await renderView();
     schedulePoll();
   }
 
@@ -313,7 +344,7 @@ export function initRoutines({ $, el, api, toast }) {
   // Follow a run while it is in progress; stop when the panel closes.
   function schedulePoll() {
     clearTimeout(state.timer);
-    if (!modal.open || state.view.name === "edit") return;
+    if (!modal.open || ["edit", "drafting"].includes(state.view.name)) return;
     if (!state.routines.some(r => r.last_run?.status === "running")) return;
     state.timer = setTimeout(refresh, RUNNING_POLL_MS);
   }
@@ -323,5 +354,20 @@ export function initRoutines({ $, el, api, toast }) {
   const open = () => { if (!modal.open) modal.showModal(); return show({ name: "inbox" }); };
   $("#routinesBtn").onclick = open;
   if (!window.__routinesPoll) window.__routinesPoll = setInterval(refreshUnread, POLL_MS);
-  return { open, refreshUnread };
+  // Plain language → a filled-in form. Nothing is saved until the user presses Save.
+  async function openDraft(text, sendInstead) {
+    if (!modal.open) modal.showModal();
+    if (!text) return show({ name: "edit", id: null });
+    const view = { name: "drafting" };
+    state.view = view;
+    detail.replaceChildren(el("div", { class: "library-loading muted", text: "Reading your request…" }));
+    try {
+      const draft = await call.draft(text);
+      if (state.view === view) await show({ name: "edit", id: null, draft: { ...draft, sendInstead } });
+    } catch (e) {
+      fail("Could not draft the routine", e);
+      if (state.view === view) await show({ name: "edit", id: null });
+    }
+  }
+  return { open, openDraft, refreshUnread };
 }

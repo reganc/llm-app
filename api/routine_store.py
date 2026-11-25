@@ -136,6 +136,20 @@ def finish_run(routine_id: str, run_id: str, fields: dict) -> None:
     _save({**current, "runs": runs})
 
 
+def annotate_run(routine_id: str, run_id: str, fields: dict) -> None:
+    """Add to a finished run without changing when it finished."""
+    current = _routines.get(routine_id)
+    if current is not None:
+        _save({**current, "runs": [{**r, **copy.deepcopy(fields)} if r["id"] == run_id else r
+                                   for r in current["runs"]]})
+
+
+def set_memory(routine_id: str, memory: dict | None) -> None:
+    current = _routines.get(routine_id)
+    if current is not None:
+        _save({**current, "memory": copy.deepcopy(memory)})
+
+
 def recover() -> int:
     """Mark runs cut off by a restart. Called once at startup."""
     n = 0

@@ -23,6 +23,7 @@ import conversations as conv_store
 import distill
 import finetune
 import memory as mem
+import notify
 import ollama as oll
 import refine
 import routine_runner
@@ -35,6 +36,7 @@ from distill import router as distill_router
 from feedback import router as feedback_router
 from finetune import router as finetune_router
 from ingest import router as ingest_router
+from notify import router as notify_router
 from refine import router as refine_router
 from routines import router as routines_router
 
@@ -42,6 +44,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
+notify.install_redaction()  # handlers exist now; keep the bot token out of them
 log = logging.getLogger("llm-api")
 
 
@@ -183,6 +186,7 @@ app.include_router(feedback_router)
 app.include_router(distill_router)
 app.include_router(refine_router)
 app.include_router(routines_router)
+app.include_router(notify_router)
 
 
 # ── Health / metrics (no auth) ───────────────────────────────────────────────

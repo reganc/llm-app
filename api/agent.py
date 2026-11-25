@@ -112,6 +112,11 @@ class Trace:
     # Marker -> {"title","url"}, built from the results themselves (never from
     # page text, which could imitate a header line).
     sources: dict[str, dict] = field(default_factory=dict)
+    # Stories to leave out of every web search (URLs in search.norm_url form),
+    # and whether a search found nothing else.
+    exclude_urls: frozenset[str] = frozenset()
+    exclude_titles: tuple[str, ...] = ()
+    all_seen: bool = False
     rounds: int = 0
     # Set when the answer cited markers it was never shown (see _repair).
     repair: dict | None = None
@@ -193,10 +198,15 @@ def _validate(name: str, args: dict | None, allowed: set[str]) -> tuple[str | No
 
 async def _web_search(query: str, trace: Trace, *, store: bool,
                       news: bool = False) -> str:
-    extra = {"news": True} if news else {}
+    extra: dict = {"news": True} if news else {}
+    if trace.exclude_urls:
+        extra["exclude_urls"] = trace.exclude_urls
+    if trace.exclude_titles:
+        extra["exclude_titles"] = trace.exclude_titles
     result = await search.search_and_ingest(query, store_memory=store, **extra)
     trace.web_queries.append(query)
     text = result.get("context_text") or ""
+    trace.all_seen = trace.all_seen or bool(result.get("all_seen"))
     if result.get("error") or not text.strip():
         return f"No web results for {query!r}."
     results = result.get("results") or []
@@ -283,6 +293,11 @@ def cited_markers(text: str) -> list[str]:
     """Every marker cited in `text`, in order, including grouped ones."""
     return [f"{kind}{num}" for group in _CITE_GROUP_RE.finditer(text)
             for kind, num in _CITE_ONE_RE.findall(group.group(2))]
+
+
+def strip_markers(text: str) -> str:
+    """`text` without any citation markers."""
+    return _CITE_GROUP_RE.sub("", text)
 
 
 def strip_citations(text: str, invalid: list[str]) -> str:
@@ -392,8 +407,12 @@ ChatFn = Callable[[dict], Awaitable[dict]]
 
 async def run(messages: list[dict], base_payload: dict, tools: list[dict], *,
               store: bool, trace: Trace | None = None,
-              chat: ChatFn | None = None) -> tuple[dict, Trace]:
+              chat: ChatFn | None = None,
+              accept: Callable[[str], bool] | None = None) -> tuple[dict, Trace]:
     """Non-streaming loop. Returns (final Ollama response, trace).
+
+    An answer for which `accept` is true is returned as is, without citation
+    repair (for a caller's "nothing to report" reply, which cites nothing).
 
     `base_payload` is a `build_payload` result (model/options/think); its
     messages are replaced each round. `chat` defaults to `oll.chat`.
@@ -414,6 +433,8 @@ async def run(messages: list[dict], base_payload: dict, tools: list[dict], *,
         msg = (data.get("message") or {})
         calls = msg.get("tool_calls") or []
         if not calls or not offer:
+            if accept and accept(msg.get("content") or ""):
+                return data, trace
             fixed = await _repair(convo, msg.get("content") or "", trace,
                                   base_payload, chat)
             if fixed is not None:

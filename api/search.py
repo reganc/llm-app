@@ -298,9 +298,42 @@ async def searxng_search(query: str, num: int) -> list[dict]:
         return await _ddg(query, num)
 
 
+_TRACKING_RE = re.compile(r"^(utm_\w+|fbclid|gclid|ocid|cmpid|mc_[ce]id)$", re.IGNORECASE)
+
+
+def norm_url(url: str) -> str:
+    """The same story under different URLs compares equal: scheme, "www.",
+    trailing slash, fragment and tracking parameters are ignored."""
+    parts = urllib.parse.urlsplit((url or "").strip())
+    query = [(k, v) for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+             if not _TRACKING_RE.match(k)]
+    host = parts.netloc.lower().removeprefix("www.")
+    tail = f"?{urllib.parse.urlencode(sorted(query))}" if query else ""
+    return f"{host}{parts.path.rstrip('/')}{tail}"
+
+
+_HEADLINE_STOP = {"the", "and", "for", "with", "after", "over", "from", "that", "this", "are",
+                  "was", "has", "its", "his", "her", "into", "amid", "says", "how", "why",
+                  "what", "will", "new"}
+
+
+def _headline_words(title: str) -> set[str]:
+    words = re.findall(r"[a-z0-9]+", (title or "").lower())
+    return {w for w in words if (len(w) > 2 or w.isdigit()) and w not in _HEADLINE_STOP}
+
+
+def same_headline(a: str, b: str) -> bool:
+    """Likely the same story: most of the shorter headline's words appear in the
+    other (which may add a publisher or a few words)."""
+    wa, wb = _headline_words(a), _headline_words(b)
+    shorter = min(len(wa), len(wb))
+    return shorter >= 4 and len(wa & wb) / shorter >= 0.7
+
+
 # Fewer dated stories than this in the last day and the search widens.
 _MIN_NEWS = 3
 _NEWS_RESULTS = 8
+_MAX_EXTRA_RESULTS = 20
 
 
 async def searxng_news(query: str, num: int) -> list[dict]:
@@ -374,7 +407,11 @@ async def fetch_aux_sites() -> list[dict]:
 async def search_and_ingest(query: str, *, num_results: int | None = None,
                             store_memory: bool = True,
                             include_x: bool = True,
-                            news: bool = False) -> dict:
+                            news: bool = False,
+                            exclude_urls: frozenset[str] = frozenset(),
+                            exclude_titles: tuple[str, ...] = ()) -> dict:
+    """`exclude_urls` (norm_url form) and `exclude_titles` drop stories the caller
+    has already seen; `all_seen` in the reply means nothing else was found."""
     if not CFG.search_enabled:
         return {"query": query, "results": [], "context_text": "",
                 "stored": 0, "error": "Search disabled"}
@@ -384,13 +421,25 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
 
     from x_search import search_x  # local import to avoid cycle
 
+    # Ask for extra so dropping seen results still leaves enough.
+    ask = num + min(len(exclude_urls), _MAX_EXTRA_RESULTS)
     raw, aux, x_items = await asyncio.gather(
-        searxng_news(query, num) if news else searxng_search(query, num),
+        searxng_news(query, ask) if news else searxng_search(query, ask),
         fetch_aux_sites(),
         search_x(query) if (include_x and CFG.x_search_enabled) else _empty(),
     )
 
+    found = len(raw) + len(x_items)
+
+    def unseen(r: dict) -> bool:
+        return (norm_url(r["url"]) not in exclude_urls
+                and not any(same_headline(r.get("title", ""), t) for t in exclude_titles))
+
+    raw, x_items = [r for r in raw if unseen(r)][:num], [r for r in x_items if unseen(r)]
     if not (raw or aux or x_items):
+        if found:
+            return {"query": query, "results": [], "context_text": "", "stored": 0,
+                    "error": "No new results", "all_seen": True}
         return {"query": query, "results": [], "context_text": "",
                 "stored": 0, "error": "No search results returned"}
 
