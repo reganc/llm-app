@@ -100,3 +100,7 @@ api_old_snapshot/
 # Eval run outputs
 ############################
 evals/results/
+
+# Local only: env backups can hold keys
+.env.bak*
+WORKLIST.md
