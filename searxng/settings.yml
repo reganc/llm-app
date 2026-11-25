@@ -2,7 +2,7 @@
 use_default_settings: true
 
 server:
-  secret_key: "change-this-secret-key-please"
+  secret_key: "set-by-SEARXNG_SECRET-in-the-environment"  # real value: .env SEARXNG_SECRET_KEY
   limiter: false          # disable rate limiting
   image_proxy: false
   method: "GET"           # allow GET requests for API calls

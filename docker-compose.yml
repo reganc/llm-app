@@ -57,7 +57,8 @@ services:
       - ./searxng/limiter.toml:/etc/searxng/limiter.toml:ro
     environment:
       - SEARXNG_BASE_URL=http://localhost:8025
-      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-change-this-secret-key-please}
+      # SearXNG reads SEARXNG_SECRET; it overrides secret_key in settings.yml.
+      - SEARXNG_SECRET=${SEARXNG_SECRET_KEY:?set SEARXNG_SECRET_KEY in .env (openssl rand -hex 32)}
     cap_drop: [ALL]
     cap_add: [CHOWN, SETGID, SETUID]
     healthcheck:
