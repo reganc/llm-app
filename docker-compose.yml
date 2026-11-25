@@ -91,6 +91,9 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile
+      additional_contexts:
+        # x-cli source checkout; its GitHub repo no longer exists
+        xcli: ${X_CLI_SRC:-${HOME}/x-cli}
     container_name: llm-api
     restart: unless-stopped
     labels:

@@ -459,6 +459,44 @@ async def _retrieval_query(history: list[dict], query: str, *,
     return await rewrite.rewrite_query(history, query)
 
 
+async def _x_or_web(query: str, *, store: bool) -> dict:
+    """X search; if X is unavailable, search the web instead and say so.
+
+    Without this the model got no context at all and described what "people on
+    X are saying" from training data.
+    """
+    result = await x_search.search_x_and_ingest(query, store_memory=store)
+    error = result.get("error")
+    if not error:
+        return result
+    web = await search.search_and_ingest(query, store_memory=store, include_x=False)
+    note = (f"X SEARCH UNAVAILABLE: {error}\nThe user has been told. "
+            "Do not describe what people on X are saying.")
+    text = web.get("context_text") or ""
+    if text:
+        note += " The results below are from the web, not X."
+    return {**web, "x_error": error, "context_text": f"{note}\n\n{text}".strip()}
+
+
+def _x_notice(search_result: dict | None) -> str:
+    """What the reader must see when X failed and the web was searched instead."""
+    error = (search_result or {}).get("x_error")
+    if not error:
+        return ""
+    return f"**X search is unavailable.** {error} This answer uses web results, not X posts.\n\n"
+
+
+def _with_x_notice(data: dict, search_result: dict | None, *, fmt=None) -> dict:
+    """Put the notice above the answer. Done here because the model, told to say
+    so, still presented web results as what people on X were saying. Structured
+    output is left alone; those callers get `web_search.x_error`."""
+    msg = data.get("message") or {}
+    notice = _x_notice(search_result)
+    if not notice or fmt is not None or not (msg.get("content") or "").strip():
+        return data
+    return {**data, "message": {**msg, "content": notice + msg["content"]}}
+
+
 async def _resolve_context(query: str, command: str | None,
                            stream: bool, allow_two_pass: bool, *,
                            use_search: bool, use_memory: bool,
@@ -559,7 +597,7 @@ async def _resolve_context(query: str, command: str | None,
             log.info("intent: forcing /search (signals=%s)", intent_signals)
 
     if command == "x":
-        search_result = await x_search.search_x_and_ingest(query, store_memory=store)
+        search_result = await _x_or_web(query, store=store)
         two_pass = False
     elif command == "search":
         search_result = await search.search_and_ingest(query, store_memory=store)
@@ -628,6 +666,7 @@ def _search_summary(search_result: dict | None, command: str | None,
         "query": search_result.get("query"),
         "stored": search_result.get("stored", 0),
         "source": search_result.get("source", "unknown"),
+        **({"x_error": search_result["x_error"]} if search_result.get("x_error") else {}),
         "retrieved_at": search_result.get("retrieved_at", ""),
         "results": search_result.get("results", []),
         "intent_signals": intent_signals or [],
@@ -678,8 +717,20 @@ async def _stream_with_summary(payload: dict, *, search_result: dict | None,
         yield f"event: llm.retrieval_query\ndata: {json.dumps({'query': retrieval_query})}\n\n"
     if mem_sum:
         yield f"event: llm.memory\ndata: {json.dumps(mem_sum)}\n\n"
+    notice = "" if payload.get("format") else _x_notice(search_result)
+    record = on_token
+    if notice:
+        yield oll._sse(f"chatcmpl-{uuid.uuid4().hex[:8]}", payload["model"],
+                       delta=notice, done=False)
+        if on_token:
+            pending = [notice]  # recorded with the first real token, never alone
+
+            def record(token: str) -> None:
+                if pending:
+                    on_token(pending.pop())
+                on_token(token)
     saw_done = False
-    async for chunk in oll.stream_chat(payload, on_token=on_token, timeout=timeout):
+    async for chunk in oll.stream_chat(payload, on_token=record, timeout=timeout):
         if chunk.startswith("data: [DONE]"):
             saw_done = True
             if search_sum:
@@ -940,6 +991,7 @@ async def chat_completions(req: ChatRequest):
             )
         else:
             data = await oll.chat(payload)
+        data = _with_x_notice(data, search_result, fmt=fmt)
         reply = data.get("message", {}).get("content", "")
         metrics["total_tokens_generated"] += data.get("eval_count", 0)
         if req.store and use_memory and inject_system and req.messages:
@@ -1048,6 +1100,7 @@ async def reasoning(req: ReasoningRequest):
             )
         else:
             data = await oll.chat(payload, timeout=CFG.reasoning_timeout_s)
+        data = _with_x_notice(data, search_result)
         msg = data.get("message", {}) or {}
         reply = msg.get("content", "") or ""
         thinking = msg.get("thinking", "") or ""
@@ -1214,6 +1267,7 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
             )
         else:
             data = await oll.chat(payload)
+        data = _with_x_notice(data, search_result)
         reply = data.get("message", {}).get("content", "")
         conv = conv_store.append_message(conv_id, "assistant", reply, message_id=message_id)
         metrics["total_tokens_generated"] += data.get("eval_count", 0)

@@ -1,9 +1,12 @@
 # ── Stage 1: build x-cli (X/Twitter search binary) ───────────────────────────
-FROM golang:1.25-alpine AS xcli-builder
-RUN apk add --no-cache git
+# The upstream repo (github.com/Gladium-AI/x-cli) is gone, so the source comes
+# from a local checkout passed as the `xcli` build context (see docker-compose).
+FROM golang:1.26-alpine AS xcli-builder
 WORKDIR /build
-RUN git clone --depth 1 https://github.com/Gladium-AI/x-cli.git . \
- && go build -o x-cli .
+COPY --from=xcli go.mod go.sum main.go ./
+COPY --from=xcli cmd ./cmd
+COPY --from=xcli internal ./internal
+RUN CGO_ENABLED=0 go build -o /out/x-cli .
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -31,7 +34,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
 RUN python -m playwright install --with-deps chromium \
  && (crawl4ai-setup || true)
 
-COPY --from=xcli-builder /build/x-cli /usr/local/bin/x-cli
+COPY --from=xcli-builder /out/x-cli /usr/local/bin/x-cli
 
 # Application code (one module per concern)
 COPY *.py ./
