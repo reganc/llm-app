@@ -19,6 +19,8 @@ import routine_query as q
     ("What is the latest stable Python version and when was it released?", "stable Python version"),
     ("Summarize climate change news in 4 bullets, include quotes", "climate change news"),
     ("Summarize AI toy safety news, with quotes and sources", "AI toy safety news"),
+    ("And when was the latest stable Python version released?", "stable Python version released"),
+    ("Who is the CEO of Nvidia?", "CEO Nvidia"),
     ("the US Open results", "US Open results"),
     ("What's new in Python?", "Python"),
     ("Resuma las noticias de IA", "Resuma las noticias de IA"),

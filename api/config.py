@@ -70,6 +70,7 @@ class Config:
 
     routines_enabled: bool
     routine_timezone: str
+    watches_enabled: bool
 
     telegram_bot_token: str
 
@@ -136,6 +137,8 @@ CFG = Config(
     # API and "run now" keep working.
     routines_enabled=os.getenv("ROUTINES_ENABLED", "true").lower() == "true",
     routine_timezone=os.getenv("ROUTINE_TIMEZONE", "America/Chicago"),
+    # Page watches (watch_runner.py). False stops the schedule.
+    watches_enabled=os.getenv("WATCHES_ENABLED", "true").lower() == "true",
     # Secret. Only notify.py uses it; the chat is chosen in Settings.
     telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
 )

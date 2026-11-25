@@ -38,7 +38,7 @@ def tg(monkeypatch):
     monkeypatch.setattr("auth.CFG", notify.CFG)
     monkeypatch.setattr(notify, "get_setting", lambda k, d=None: store.get(k, d))
     monkeypatch.setattr(notify, "set_setting", lambda k, v: store.__setitem__(k, v))
-    monkeypatch.setattr(notify, "_client", lambda: httpx.AsyncClient(
+    monkeypatch.setattr(notify, "_client", lambda *_a: httpx.AsyncClient(
         transport=httpx.MockTransport(s.handle)))
 
     async def no_sleep(_s):
@@ -204,7 +204,28 @@ def test_auth(c, m, p):
 
 def test_status_never_returns_the_token(c):
     r = c.get("/v1/notify/telegram/status", headers=AUTH)
-    assert r.json() == {"token_set": True, "chat_set": True, "ready": True} and TOKEN not in r.text
+    assert r.json() == {"token_set": True, "chat_set": True, "ready": True, "chat_enabled": False,
+                        "library": False} and TOKEN not in r.text
+
+
+def test_chat_options(c, tg):
+    url = "/v1/notify/telegram/options"
+    assert c.post(url, json={"chat": True}).status_code == 401
+    r = c.post(url, json={"chat": True}, headers=AUTH).json()
+    assert r["chat_enabled"] is True and r["library"] is False
+    assert c.post(url, json={"library": True}, headers=AUTH).json()["library"] is True
+    # One reader per bot: the chat loop has it now.
+    assert c.get("/v1/notify/telegram/chats", headers=AUTH).status_code == 409
+    assert c.post("/v1/notify/telegram/chat", json={"chat_id": 1}, headers=AUTH).status_code == 409
+    assert c.post(url, json={"chat": False}, headers=AUTH).json()["chat_enabled"] is False
+    assert c.post(url, json={"x": 1}, headers=AUTH).status_code == 422
+    tg.store.pop("telegram_chat_id")
+    assert c.post(url, json={"chat": True}, headers=AUTH).status_code == 422
+
+
+def test_send_returns_the_message_id(tg):
+    tg.replies = [httpx.Response(200, json={"ok": True, "result": {"message_id": 9}})]
+    assert run(notify.send("x")) == 9
 
 
 def test_find_chats_lists_private_chats_once(c):

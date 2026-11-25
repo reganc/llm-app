@@ -40,6 +40,10 @@
           <span>Routines</span>
           <span id="routinesCount" class="count unread" hidden>0</span>
         </button>
+        <button id="skillsBtn" class="ghost-btn full" title="Skills — saved instructions you can reuse">
+          <svg viewBox="0 0 16 16" width="14" height="14"><path d="M9 1.8L3.6 9H7.4L6.6 14.2 12.4 6.8H8.4L9 1.8z" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          <span>Skills</span>
+        </button>
         <button id="settingsBtn" class="ghost-btn full" title="Settings">
           <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="2.4" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M8 1v2.2M8 12.8V15M3.05 3.05l1.55 1.55M11.4 11.4l1.55 1.55M1 8h2.2M12.8 8H15M3.05 12.95l1.55-1.55M11.4 4.6l1.55-1.55" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <span>Settings</span>
@@ -234,6 +238,12 @@
             <button type="button" id="tgTestBtn" class="ghost-btn" formnovalidate hidden>Send a test</button>
           </div>
           <div id="tgChats" class="tg-actions"></div>
+          <div id="tgOptions" class="tg-options" hidden>
+            <label class="check-line"><input type="checkbox" id="tgChatToggle" /> Chat from Telegram</label>
+            <small class="muted">Answers only your chat. It can search, and list, run or pause your routines. Messages pass through Telegram's servers.</small>
+            <label class="check-line"><input type="checkbox" id="tgLibraryToggle" /> Let those answers use my library</label>
+            <small class="muted">Anything quoted from your library would leave this machine.</small>
+          </div>
         </div>
         <div class="field">
           <label>Knowledge distillation</label>
@@ -315,6 +325,7 @@
         <span id="routinesStats" class="muted-small">…</span>
       </div>
       <div class="library-head-right">
+        <button type="button" id="watchNewBtn" class="ghost-btn" title="Watch a web page for changes"><span>Watch a page</span></button>
         <button type="button" id="routinesNewBtn" class="ghost-btn">
           <svg viewBox="0 0 16 16" width="13" height="13"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           <span>New routine</span>
@@ -352,6 +363,8 @@
         <label><input type="checkbox" name="extra_sites" /> Also read my always-included sites</label></div>
       <label class="field query-field"><span>Search for <small class="muted">(optional, worked out from the task)</small></span>
         <input name="query" maxlength="300" placeholder="AI news" autocomplete="off" /></label>
+      <label class="field skill-field"><span>Skill <small class="muted">(optional, saved instructions to follow)</small></span>
+        <select name="skill"><option value="">None</option></select></label>
       <div class="check-row">
         <label><input type="checkbox" name="only_new" /> Only tell me what's new since earlier results</label></div>
       <div class="field-grid">
@@ -376,6 +389,67 @@
       </div>
     </form>
   </template>
+
+  <template id="watchFormTpl">
+    <form class="routine-form watch-form">
+      <label class="field"><span>Name</span>
+        <input name="name" required maxlength="80" placeholder="GPU price" autocomplete="off" /></label>
+      <label class="field"><span>Page address</span>
+        <input name="url" type="url" required maxlength="1000" placeholder="https://example.com/product" autocomplete="off" /></label>
+      <label class="field"><span>Tell me when</span>
+        <select name="kind"><option value="number">A number changes (a price, a version, a count)</option><option value="phrase">Some words appear or disappear</option><option value="change">Anything on the page changes</option></select></label>
+      <div class="field-grid kind-number">
+        <label class="field"><span>Words just before the number</span>
+          <input name="label" maxlength="120" placeholder="Price" autocomplete="off" /></label>
+        <label class="field"><span>When it</span>
+          <select name="numberWhen"><option value="changes">changes at all</option><option value="below">goes below</option><option value="above">goes above</option></select></label>
+        <label class="field limit-field"><span>This number</span>
+          <input name="limit" type="number" step="any" autocomplete="off" /></label>
+      </div>
+      <div class="field-grid kind-phrase">
+        <label class="field"><span>Words to look for</span>
+          <input name="phrase" maxlength="120" placeholder="In stock" autocomplete="off" /></label>
+        <label class="field"><span>When they</span>
+          <select name="phraseWhen"><option value="appears">appear</option><option value="disappears">disappear</option><option value="either">appear or disappear</option></select></label>
+      </div>
+      <label class="field kind-change"><span>Only lines containing <small class="muted">(optional)</small></span>
+        <input name="only" maxlength="120" autocomplete="off" /></label>
+      <label class="field"><span>Check every</span>
+        <select name="every"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">hour</option><option value="180">3 hours</option><option value="360">6 hours</option><option value="720">12 hours</option><option value="1440">day</option></select></label>
+      <div class="check-row">
+        <label><input type="checkbox" name="notify" /> Send alerts to Telegram</label></div>
+      <div class="check-row">
+        <label><input type="checkbox" name="approve" /> <span class="approve-text">Let llm-app read this site on schedule</span></label></div>
+      <div class="watch-preview" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="ghost-btn cancel">Cancel</button>
+        <button type="button" class="ghost-btn preview">See what it finds</button>
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+    </form>
+  </template>
+
+  <!-- Modal: Skills -->
+  <dialog id="skillsModal" class="modal wide">
+    <header class="modal-head"><h3>Skills</h3><button type="button" class="icon-btn" data-close="skillsModal" title="Close">×</button></header>
+    <div class="modal-body">
+      <p class="muted">Saved instructions. Type <code>/name</code> before a message, here or in Telegram, or choose one in a routine.</p>
+      <div id="skillsList" class="skills-list"></div>
+      <form id="skillForm" class="routine-form" hidden>
+        <label class="field"><span>Name <small class="muted">(letters, numbers and dashes)</small></span>
+          <input name="name" required maxlength="40" pattern="[A-Za-z0-9][A-Za-z0-9\-]*" placeholder="brief" autocomplete="off" /></label>
+        <label class="field"><span>What it's for <small class="muted">(optional)</small></span>
+          <input name="description" maxlength="120" placeholder="Two-line answers" autocomplete="off" /></label>
+        <label class="field"><span>Instructions</span>
+          <textarea name="instructions" rows="7" required maxlength="4000" placeholder="Answer in at most two lines. Lead with the number that matters."></textarea></label>
+        <div class="modal-actions">
+          <button type="button" class="ghost-btn cancel">Cancel</button>
+          <button type="submit" class="primary-btn">Save</button>
+        </div>
+      </form>
+    </div>
+    <footer class="modal-foot"><button type="button" id="skillNewBtn" class="ghost-btn">New skill</button></footer>
+  </dialog>
 
   <!-- Modal: Add URL -->
   <dialog id="urlIngestModal" class="modal">

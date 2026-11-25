@@ -47,6 +47,13 @@ llm-app/
 │   ├── routine_query.py        # search phrase worked out from a task
 │   ├── routine_check.py        # keeps only points their sources back
 │   ├── notify.py               # Telegram notifications
+│   ├── telegram_chat.py        # chat and commands from Telegram
+│   ├── skills.py               # saved instructions (/name)
+│   ├── watches.py              # /v1/watches API
+│   ├── watch_runner.py         # page-watch schedule and alerts
+│   ├── watch_check.py          # reads and compares watched pages (no model)
+│   ├── watch_store.py          # watches (JSON files)
+│   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
 │   ├── chat.py                 # /v1/chat/completions, /reasoning, /conversations
@@ -150,6 +157,8 @@ Coverage:
 | `test_routine_schedule.py` · `test_routine_store.py` · `test_routine_runner.py` · `test_routines_api.py` | routines: DST/weekday math, atomic bounded storage, crash recovery, missed-run skip, one run at a time, source mapping, unsourced labelling, API |
 | `test_routine_memory.py` · `test_notify.py` · `test_routine_draft.py` · `test_routine_phrases.py` | only-what's-new, Telegram (content rules, retries, token redaction), plain-language drafts, chat phrase detection (needs node) |
 | `test_routine_query.py` · `test_routine_check.py` · `test_news_search.py` | search phrase from a task, per-point source check, news topic filter/widening/extra sites |
+| `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
+| `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
@@ -231,6 +240,25 @@ the schedule from the user's words and warns about anything assumed; the model
 only tidies wording, which is discarded if it adds a name or number; the user
 always confirms in the form.
 
+**Chat from Telegram** (`api/telegram_chat.py`): off until switched on in Settings.
+One long-poll reader; only the chosen private chat is answered, others are ignored
+silently. Code reads commands from the user's own typed messages (never forwarded
+ones or text inside a sentence); the only actions are list, run, pause and resume
+routines. Each update is marked seen before it is acted on, and messages older than
+15 minutes are skipped. Questions use the read-only agent loop with `store:false`,
+without the library unless `telegram_library` is on. The model claimed to have acted
+in testing, so requests to act get a fixed reply and claims are corrected in code.
+Never log message text.
+
+**Page watches** (`api/watch*.py`, `safe_fetch.py`): a number after a label, a phrase,
+or any line. No model: alerts quote the page. The first look and every change are
+loaded twice; lines that flicker are ignored. The user approves each host; every
+request and redirect is resolved once, must be public, and connects to that address
+(SNI/cert still checked). Never fetch a watched page any other way.
+
+**Skills** (`api/skills.py`): `/name …` in chat or Telegram, or a routine's `skill`.
+Text added to the system prompt, nothing else; a skill in use can't be deleted.
+
 **Evals** (`evals/`, see its README): 29 golden cases scored against the live
 stack — `python evals/run.py [--mode stream] [--compare <results.json>]`.
 Requests send `store:false` so evals never write memory.
@@ -281,7 +309,9 @@ flag False and are unchanged.
 - `GET  /v1/search/x/status` · `POST /v1/search/x` — X/Twitter search
 - `GET  /v1/memory/stats` · `GET /v1/memory/search` · `DELETE /v1/memory/source/{id}` · `POST /v1/memory/ingest` · `POST /v1/memory/wipe`
 - `GET/POST /v1/routines` · `GET/PATCH/DELETE /v1/routines/{id}` · `POST /v1/routines/draft` · `POST /v1/routines/{id}/run` · `POST /v1/routines/{id}/forget` · `GET /v1/routines/inbox` · `POST /v1/routines/inbox/read` · `POST /v1/routines/{id}/runs/{run_id}/read` — scheduled tasks and their results
-- `GET /v1/notify/telegram/status` · `GET …/chats` · `POST …/chat` · `POST …/test` — Telegram setup
+- `GET /v1/notify/telegram/status` · `GET …/chats` · `POST …/chat` · `POST …/options` · `POST …/test` — Telegram setup
+- `GET/POST /v1/watches` · `GET/PATCH/DELETE /v1/watches/{id}` · `POST /v1/watches/preview` · `POST /v1/watches/{id}/check` · `POST /v1/watches/{id}/read` — watched pages
+- `GET/POST /v1/skills` · `PUT/DELETE /v1/skills/{name}` — saved skills
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
@@ -316,6 +346,7 @@ flag False and are unchanged.
 | `SEARXNG_FALLBACK_ENGINES` | `bing,google,brave` | Asked only when the primary engines return nothing (Bing outranks better engines with off-topic hits when mixed in). Empty disables |
 | `SEARXNG_NEWS_ENGINES` | `bing news` | Engines for "recent news" routines (last day, then week, then a normal search) |
 | `ROUTINES_ENABLED` | `true` | Run routines on schedule; `false` leaves "run now" working |
+| `WATCHES_ENABLED` | `true` | Check watched pages on schedule; `false` leaves "check now" working |
 | `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |

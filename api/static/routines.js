@@ -1,5 +1,6 @@
 // Routines: saved tasks that run on a schedule, and the inbox of results.
 import { renderMd } from "./md.js";
+import { initWatches } from "./watches.js";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
@@ -45,7 +46,7 @@ export function fmtWhen(iso, now = new Date()) {
 // Sources come from web results; only link what is really a web address.
 export const safeUrl = (u) => (/^https?:\/\//i.test(u || "") ? u : "");
 
-export function initRoutines({ $, el, api, toast }) {
+export function initRoutines({ $, el, api, toast, skills }) {
   const call = {
     list: () => api.json("/v1/routines"),
     inbox: () => api.json("/v1/routines/inbox?limit=50"),
@@ -61,7 +62,9 @@ export function initRoutines({ $, el, api, toast }) {
     readAll: () => api.json("/v1/routines/inbox/read", { method: "POST", body: "{}" }),
   };
   // view: {name:"inbox"} | {name:"routine", id} | {name:"edit", id|null, draft?}
-  const state = { routines: [], unread: 0, tz: "", scheduler: true, view: { name: "inbox" }, timer: 0 };
+  //     | {name:"watch", id} | {name:"watch-edit", id|null}
+  const FORMS = ["edit", "drafting", "watch-edit"];
+  const state = { routines: [], watches: [], unread: 0, tz: "", scheduler: true, view: { name: "inbox" }, timer: 0 };
   const modal = $("#routinesModal");
   const detail = $("#routinesDetail");
 
@@ -72,8 +75,10 @@ export function initRoutines({ $, el, api, toast }) {
   };
   const fail = (what, e) => toast(`${what}: ${e.message}`, "error", 5000);
 
-  function setUnread(n) {
-    state.unread = n;
+  function setUnread(routines, pages = state.unreadPages || 0) {
+    state.unread = routines;
+    state.unreadPages = pages;
+    const n = routines + pages;
     const node = $("#routinesCount");
     node.textContent = n > 99 ? "99+" : String(n);
     node.hidden = n === 0;
@@ -81,15 +86,19 @@ export function initRoutines({ $, el, api, toast }) {
 
   async function refreshUnread() {
     if (document.hidden) return;
-    try { setUnread((await call.list()).unread); } catch { /* badge only */ }
+    try {
+      const [r, w] = await Promise.all([call.list(), watches.list()]);
+      setUnread(r.unread, w.unread);
+    } catch { /* badge only */ }
   }
 
   async function refreshList() {
-    const data = await call.list();
+    const [data, pages] = await Promise.all([call.list(), watches.list()]);
+    state.watches = pages.watches;
     state.routines = data.routines;
     state.tz = data.default_timezone;
     state.scheduler = data.scheduler_enabled;
-    setUnread(data.unread);
+    setUnread(data.unread, pages.unread);
     renderList();
   }
 
@@ -119,6 +128,8 @@ export function initRoutines({ $, el, api, toast }) {
       list.append(row(v.id === r.id, r.name, meta, running ? "◌" : r.enabled ? "⏱" : "⏸",
         () => show({ name: "routine", id: r.id })));
     }
+    if (state.watches.length) list.append(el("div", { class: "list-heading", text: "Watched pages" }));
+    for (const w of state.watches) list.append(watches.row(w, v.name.startsWith("watch") && v.id === w.id));
     $("#routinesStats").textContent = state.scheduler
       ? `${state.routines.length} ${state.routines.length === 1 ? "routine" : "routines"}`
       : "Scheduler is off (ROUTINES_ENABLED=false)";
@@ -234,7 +245,7 @@ export function initRoutines({ $, el, api, toast }) {
         catch (e) { fail("Could not clear", e); }
       }));
     }
-    const extras = [r.only_new && "only new", r.notify !== "off" && `Telegram ${r.notify}`].filter(Boolean);
+    const extras = [r.skill && `skill /${r.skill}`, r.only_new && "only new", r.notify !== "off" && `Telegram ${r.notify}`].filter(Boolean);
     const tools = [r.sources.web && (r.sources.news ? "recent news" : "web"), r.sources.library && "library"].filter(Boolean).join(" + ") || "no tools";
     const searches = r.search_phrase && `searches “${r.search_phrase}”`;
     const next = r.enabled ? `next ${fmtWhen(r.next_run_at)}` : "paused";
@@ -250,6 +261,7 @@ export function initRoutines({ $, el, api, toast }) {
   async function renderForm(view) {
     const r = view.id ? await call.get(view.id) : view.draft?.routine || null;
     const telegram = await call.telegram().catch(() => ({ ready: false }));
+    const saved = await skills.refresh().catch(() => []);
     if (state.view !== view) return;
     const form = $("#routineFormTpl").content.firstElementChild.cloneNode(true);
     const f = (name) => form.elements[name];
@@ -271,6 +283,9 @@ export function initRoutines({ $, el, api, toast }) {
     f("news").checked = !!r?.sources.news;
     f("extra_sites").checked = !!r?.sources.extra_sites;
     if (r?.search_phrase && !r.query) f("query").placeholder = r.search_phrase;
+    f("skill").append(...saved.map(s => el("option", { value: s.name, text: `/${s.name}${s.description ? ` (${s.description})` : ""}` })));
+    f("skill").value = r?.skill || "";
+    form.querySelector(".skill-field").hidden = !saved.length;
     f("only_new").checked = !!r?.only_new;
     f("notify").value = r?.notify || "off";
     form.querySelector(".notify-hint").hidden = telegram.ready;
@@ -310,6 +325,7 @@ export function initRoutines({ $, el, api, toast }) {
         sources: { web: f("web").checked, library: f("library").checked, news: f("news").checked,
           extra_sites: f("news").checked && f("extra_sites").checked },
         only_new: f("only_new").checked,
+        skill: f("skill").value || null,
         notify: f("notify").value,
       };
       const save = form.querySelector("[type=submit]");
@@ -328,7 +344,9 @@ export function initRoutines({ $, el, api, toast }) {
   // ── navigation ─────────────────────────────────────────────────────────────
   async function renderView() {
     const view = state.view;
-    const draw = { inbox: renderInbox, routine: renderRoutine, edit: renderForm }[view.name];
+    const draw = { inbox: renderInbox, routine: renderRoutine, edit: renderForm,
+      watch: (v) => watches.renderWatch(v, () => state.view === v),
+      "watch-edit": (v) => watches.renderForm(v, () => state.view === v) }[view.name];
     try { await draw(view); } catch (e) {
       if (state.view !== view) return;
       if (view.id && e.message.startsWith("404")) { await show({ name: "inbox" }); return; }
@@ -338,7 +356,7 @@ export function initRoutines({ $, el, api, toast }) {
 
   async function refresh() {
     try { await refreshList(); } catch (e) { fail("Routines unavailable", e); }
-    if (!["edit", "drafting"].includes(state.view.name)) await renderView();
+    if (!FORMS.includes(state.view.name)) await renderView();
     schedulePoll();
   }
 
@@ -353,11 +371,13 @@ export function initRoutines({ $, el, api, toast }) {
   // Follow a run while it is in progress; stop when the panel closes.
   function schedulePoll() {
     clearTimeout(state.timer);
-    if (!modal.open || ["edit", "drafting"].includes(state.view.name)) return;
+    if (!modal.open || FORMS.includes(state.view.name)) return;
     if (!state.routines.some(r => r.last_run?.status === "running")) return;
     state.timer = setTimeout(refresh, RUNNING_POLL_MS);
   }
 
+  const watches = initWatches({ $, el, api, toast }, { detail, show, head, btn, fail, refresh });
+  $("#watchNewBtn").onclick = () => show({ name: "watch-edit", id: null });
   $("#routinesNewBtn").onclick = () => show({ name: "edit", id: null });
   modal.addEventListener("close", () => clearTimeout(state.timer));
   const open = () => { if (!modal.open) modal.showModal(); return show({ name: "inbox" }); };
@@ -378,5 +398,6 @@ export function initRoutines({ $, el, api, toast }) {
       if (state.view === view) await show({ name: "edit", id: null });
     }
   }
-  return { open, openDraft, refreshUnread };
+  const watchPage = () => { if (!modal.open) modal.showModal(); return show({ name: "watch-edit", id: null }); };
+  return { open, openDraft, refreshUnread, watchPage };
 }

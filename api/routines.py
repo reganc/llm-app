@@ -1,7 +1,6 @@
 """/v1/routines — saved tasks that run on a schedule, and the inbox of results."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,9 +10,10 @@ import routine_draft
 import routine_query
 import routine_runner as runner
 import routine_store as store
+import skills
 from auth import verify_api_key
 from config import CFG
-from routine_schedule import Schedule, next_run, valid_timezone
+from routine_schedule import Schedule, valid_timezone
 
 router = APIRouter(prefix="/v1/routines", tags=["routines"],
                    dependencies=[Depends(verify_api_key)])
@@ -24,6 +24,7 @@ Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max
 Prompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 DraftText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
 Notify = Literal["off", "headline", "full"]
+SkillName = Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, max_length=40)]
 SearchQuery = Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)]
 
 
@@ -51,6 +52,7 @@ class RoutineCreate(BaseModel):
     sources: Sources = Field(default_factory=Sources)
     only_new: bool = False  # report only what earlier runs did not
     notify: Notify = "off"  # Telegram, for scheduled runs
+    skill: SkillName | None = None  # saved instructions to follow
     enabled: bool = True
 
     model_config = {"extra": "forbid"}
@@ -66,6 +68,7 @@ class RoutineUpdate(BaseModel):
     sources: Sources | None = None
     only_new: bool | None = None
     notify: Notify | None = None
+    skill: SkillName | None = None
     enabled: bool | None = None
 
     model_config = {"extra": "forbid"}
@@ -73,7 +76,7 @@ class RoutineUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _no_nulls(self) -> "RoutineUpdate":
-        for name in self.model_fields_set - {"query"}:  # only `query` can be cleared
+        for name in self.model_fields_set - {"query", "skill"}:  # only these can be cleared
             if getattr(self, name) is None:
                 raise ValueError(f"{name} must not be null")
         return self
@@ -84,18 +87,18 @@ def _summary(routine: dict) -> dict:
     latest = routine["runs"][0] if routine["runs"] else None
     keys = ("id", "status", "trigger", "started_at", "finished_at")
     memory = routine.get("memory") or {}
-    return {"only_new": False, "notify": "off",
+    return {"only_new": False, "notify": "off", "skill": None,
             **{k: v for k, v in routine.items() if k not in ("runs", "memory")},
             "search_phrase": routine_query.effective(routine),
             "remembers": len(memory.get("urls") or []),
             "last_run": {k: latest[k] for k in keys} if latest else None}
 
 
-def _upcoming(fields: dict) -> str | None:
-    if not fields["enabled"]:
-        return None
-    return next_run(Schedule(**fields["schedule"]), datetime.now(timezone.utc),
-                    fields["timezone"]).isoformat(timespec="seconds")
+def _check_skill(fields: dict) -> None:
+    if "skill" in fields:
+        fields["skill"] = fields["skill"] or None
+        if fields["skill"] and skills.get(fields["skill"]) is None:
+            raise HTTPException(422, "skill not found")
 
 
 def _require(routine_id: str) -> dict:
@@ -118,7 +121,8 @@ async def create_routine(req: RoutineCreate):
         raise HTTPException(409, f"limit of {MAX_ROUTINES} routines reached")
     fields = req.model_dump()
     fields["query"] = fields["query"] or None
-    return _summary(store.create({**fields, "next_run_at": _upcoming(fields)}))
+    _check_skill(fields)
+    return _summary(store.create({**fields, "next_run_at": runner.upcoming(fields)}))
 
 
 class DraftRequest(BaseModel):
@@ -155,8 +159,9 @@ async def update_routine(routine_id: str, req: RoutineUpdate):
     fields = req.model_dump(exclude_unset=True)
     if "query" in fields:
         fields["query"] = fields["query"] or None
+    _check_skill(fields)
     if fields.keys() & {"schedule", "timezone", "enabled"}:
-        fields["next_run_at"] = _upcoming({**current, **fields})
+        fields["next_run_at"] = runner.upcoming({**current, **fields})
     # Filled in first: a routine saved before a source option existed is not a new task.
     before = {**current, "sources": Sources(**current["sources"]).model_dump()}
     if any(f in fields and fields[f] != before.get(f) for f in runner.TASK_FIELDS):

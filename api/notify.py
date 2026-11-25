@@ -3,8 +3,7 @@
 The bot token is part of every Telegram URL, and httpx logs URLs at INFO, so
 `RedactToken` is installed before anything is sent and errors raised from here
 never carry the URL. Messages are plain text (no parse mode, no previews): the
-content comes from web pages. Sending is the only action; nothing is received
-from Telegram except the chat list, read when the user asks for it.
+content comes from web pages. Receiving messages is telegram_chat's job.
 """
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ API_BASE = "https://api.telegram.org"
 _LIMIT = 4096            # Telegram's cap, in UTF-16 units
 _HEADLINE_CHARS = 140
 _MAX_RETRY_WAIT_S = 30
-_CHAT_SETTING = "telegram_chat_id"
+CHAT_SETTING = "telegram_chat_id"
 
 _TOKEN_RE = re.compile(r"bot\d+:[A-Za-z0-9_-]+")
 _URL_RE = re.compile(r"https?://\S+")
@@ -60,8 +59,8 @@ install_redaction()
 
 # ── Telegram calls ───────────────────────────────────────────────────────────
 
-def _client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=15.0)
+def _client(timeout: float = 15.0) -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=timeout)
 
 
 async def _sleep(seconds: float) -> None:
@@ -86,13 +85,13 @@ def _retry_after(response: httpx.Response) -> float:
         return 5.0
 
 
-async def _call(method: str, payload: dict) -> object:
+async def call(method: str, payload: dict, timeout: float = 15.0) -> object:
     """One Telegram call with a single retry for temporary failures."""
     if not CFG.telegram_bot_token:
         raise NotifyError("Telegram is not set up: TELEGRAM_BOT_TOKEN is empty.")
     url = f"{API_BASE}/bot{CFG.telegram_bot_token}/{method}"
     problem = "Could not reach Telegram."
-    async with _client() as client:
+    async with _client(timeout) as client:
         for attempt in range(2):
             wait = 2.0
             try:
@@ -123,12 +122,14 @@ def _cut(text: str, limit: int = _LIMIT) -> str:
     return raw[:(limit - 1) * 2].decode("utf-16-le", errors="ignore") + "…"
 
 
-async def send(text: str) -> None:
-    chat_id = get_setting(_CHAT_SETTING)
+async def send(text: str) -> int | None:
+    """Returns the id of the message Telegram created."""
+    chat_id = get_setting(CHAT_SETTING)
     if not CFG.telegram_bot_token or chat_id is None:
         raise NotifyError("Telegram is not set up.")
-    await _call("sendMessage", {"chat_id": chat_id, "text": _cut(text),
-                                "link_preview_options": {"is_disabled": True}})
+    sent = await call("sendMessage", {"chat_id": chat_id, "text": _cut(text),
+                                      "link_preview_options": {"is_disabled": True}})
+    return sent.get("message_id") if isinstance(sent, dict) else None
 
 
 # ── what and when ────────────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ def should_notify(routine: dict, run: dict, previous_status: str | None) -> bool
     return run["status"] == "ok"
 
 
-def _plain(text: str) -> str:
+def plain(text: str) -> str:
     text = _LINK_RE.sub(r"\1", text)
     text = re.sub(r"\*\*|__|`", "", text)
     text = re.sub(r"(?m)^\s*#{1,6}\s+", "", text)
@@ -154,7 +155,7 @@ def _headline(content: str) -> str:
     for line in content.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        text = agent.strip_markers(_URL_RE.sub("", _plain(line)))
+        text = agent.strip_markers(_URL_RE.sub("", plain(line)))
         text = " ".join(text.lstrip("•0123456789.) ").split())
         if text:
             return text if len(text) <= _HEADLINE_CHARS else text[:_HEADLINE_CHARS - 1] + "…"
@@ -179,7 +180,7 @@ def message(routine: dict, run: dict) -> str:
     if routine.get("notify") == "full":
         links = [f"[{s['marker']}] {s['title']} {s['url']}" for s in run.get("sources") or []
                  if str(s.get("url", "")).startswith(("http://", "https://"))]
-        body = _cut(_plain(content), 3000)
+        body = _cut(plain(content), 3000)
         return "\n\n".join(["\n".join(parts), body, *(["Sources:\n" + "\n".join(links)] if links else [])])
     if sources.get("web") and not sources.get("library"):
         parts.append(_headline(content))
@@ -198,10 +199,23 @@ class ChatChoice(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class Options(BaseModel):
+    chat: bool | None = None     # answer messages from the chosen chat
+    library: bool | None = None  # allow the saved library in those answers
+
+    model_config = {"extra": "forbid"}
+
+
+CHAT_ENABLED, CHAT_LIBRARY = "telegram_chat_enabled", "telegram_library"
+
+
 async def _private_chats() -> list[dict]:
     """People who have messaged the bot. Message text is never kept."""
+    if get_setting(CHAT_ENABLED, False) and get_setting(CHAT_SETTING) is not None:
+        # One reader per bot: the chat loop is already reading these.
+        raise HTTPException(409, "Turn off “Chat from Telegram” to choose another chat.")
     try:
-        updates = await _call("getUpdates", {"limit": 100, "timeout": 0})
+        updates = await call("getUpdates", {"limit": 100, "timeout": 0})
     except NotifyError as e:
         raise HTTPException(502, str(e)) from None
     found: dict[int, dict] = {}
@@ -215,8 +229,21 @@ async def _private_chats() -> list[dict]:
 
 @router.get("/status")
 async def status():
-    token, chat = bool(CFG.telegram_bot_token), get_setting(_CHAT_SETTING) is not None
-    return {"token_set": token, "chat_set": chat, "ready": token and chat}
+    token, chat = bool(CFG.telegram_bot_token), get_setting(CHAT_SETTING) is not None
+    return {"token_set": token, "chat_set": chat, "ready": token and chat,
+            "chat_enabled": bool(get_setting(CHAT_ENABLED, False)),
+            "library": bool(get_setting(CHAT_LIBRARY, False))}
+
+
+@router.post("/options")
+async def set_options(req: Options):
+    if req.chat and not (CFG.telegram_bot_token and get_setting(CHAT_SETTING) is not None):
+        raise HTTPException(422, "Choose your Telegram chat first.")
+    if req.chat is not None:
+        set_setting(CHAT_ENABLED, req.chat)
+    if req.library is not None:
+        set_setting(CHAT_LIBRARY, req.library)
+    return await status()
 
 
 @router.get("/chats")
@@ -228,7 +255,7 @@ async def chats():
 async def choose_chat(req: ChatChoice):
     if all(c["id"] != req.chat_id for c in await _private_chats()):
         raise HTTPException(422, "That chat has not messaged the bot recently.")
-    set_setting(_CHAT_SETTING, req.chat_id)
+    set_setting(CHAT_SETTING, req.chat_id)
     return {"chat_set": True}
 
 

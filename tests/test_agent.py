@@ -549,3 +549,13 @@ def test_padded_brackets_count_as_citations(tools_env):
     data, trace = run(script)
     assert len(script.payloads) == 2 and trace.repair is None
     assert agent.strip_citations("a [ W8 ] b [ W1 , W8 ].", ["W8"]) == "a b [W1]."
+
+
+@pytest.mark.parametrize("text,tidy,bare", [
+    ("Up [[W2], [W4]].", "Up [W2][W4].", "Up."),
+    ("Up [[W1]].", "Up [W1].", "Up."),
+    ("Up [W1, W2] and [L3].", "Up [W1, W2] and [L3].", "Up and."),
+    ("A [link](u) and a list [1, 2].", "A [link](u) and a list [1, 2].", "A [link](u) and a list [1, 2]."),
+])
+def test_nested_citations(text, tidy, bare):
+    assert agent.tidy_citations(text) == tidy and agent.strip_markers(text) == bare

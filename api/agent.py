@@ -311,9 +311,18 @@ def cited_markers(text: str) -> list[str]:
             for kind, num in _CITE_ONE_RE.findall(group.group(2))]
 
 
+_NESTED_RE = re.compile(r"\[((?:\s*\[[WXAL]\d+\]\s*[,;]?)+)\s*\]")
+_EMPTY_GROUP_RE = re.compile(r"\s*\[[\s,;]*\](?!\()")
+
+
+def tidy_citations(text: str) -> str:
+    """"[[W1], [W2]]" as "[W1][W2]"."""
+    return _NESTED_RE.sub(lambda m: "".join(re.findall(r"\[[WXAL]\d+\]", m.group(1))), text)
+
+
 def strip_markers(text: str) -> str:
     """`text` without any citation markers."""
-    return _CITE_GROUP_RE.sub("", text)
+    return _EMPTY_GROUP_RE.sub("", _CITE_GROUP_RE.sub("", tidy_citations(text)))
 
 
 def strip_citations(text: str, invalid: list[str]) -> str:

@@ -28,6 +28,8 @@ import ollama as oll
 import refine
 import routine_runner
 import search
+import telegram_chat
+import watch_runner
 from admin_routes import router as admin_router
 from chat import metrics
 from chat import router as chat_router
@@ -39,6 +41,8 @@ from ingest import router as ingest_router
 from notify import router as notify_router
 from refine import router as refine_router
 from routines import router as routines_router
+from skills import router as skills_router
+from watches import router as watches_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -63,11 +67,13 @@ async def lifespan(app: FastAPI):
     distill_task = asyncio.create_task(distill.scheduler_loop())
     refine_task = asyncio.create_task(refine.scheduler_loop())
     routines_task = asyncio.create_task(routine_runner.scheduler_loop())
+    watches_task = asyncio.create_task(watch_runner.scheduler_loop())
+    telegram_task = asyncio.create_task(telegram_chat.loop())
     try:
         yield
     finally:
         await routine_runner.shutdown()
-        for t in (distill_task, refine_task, routines_task):
+        for t in (distill_task, refine_task, routines_task, watches_task, telegram_task):
             t.cancel()
             try:
                 await t
@@ -187,6 +193,8 @@ app.include_router(distill_router)
 app.include_router(refine_router)
 app.include_router(routines_router)
 app.include_router(notify_router)
+app.include_router(skills_router)
+app.include_router(watches_router)
 
 
 # ── Health / metrics (no auth) ───────────────────────────────────────────────

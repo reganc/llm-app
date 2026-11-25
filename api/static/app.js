@@ -3,6 +3,7 @@
 import { escHtml, renderMd } from "./md.js";
 import { routineRequest } from "./routine-phrases.js";
 import { initRoutines } from "./routines.js";
+import { initSkills } from "./skills.js";
 
 // ─────────────────────── State ───────────────────────
 const State = {
@@ -137,6 +138,7 @@ const api = {
   tgStatus: () => api.json("/v1/notify/telegram/status"),
   tgChats: () => api.json("/v1/notify/telegram/chats"),
   tgChoose: (id) => api.json("/v1/notify/telegram/chat", { method: "POST", body: JSON.stringify({ chat_id: id }) }),
+  tgOptions: (b) => api.json("/v1/notify/telegram/options", { method: "POST", body: JSON.stringify(b) }),
   tgTest: () => api.json("/v1/notify/telegram/test", { method: "POST", body: "{}" }),
   xStatus: () => api.json("/v1/search/x/status"),
   distillStatus: () => api.json("/v1/distill/status"),
@@ -960,6 +962,17 @@ async function refreshTelegram() {
   find.hidden = !s.token_set;
   find.textContent = s.chat_set ? "Change chat" : "Find my chat";
   test.hidden = !s.ready;
+  const options = $("#tgOptions"), chat = $("#tgChatToggle"), library = $("#tgLibraryToggle");
+  options.hidden = !s.ready;
+  chat.checked = s.chat_enabled;
+  library.checked = s.library;
+  library.disabled = !s.chat_enabled;
+  const set = async (body) => {
+    try { await api.tgOptions(body); } catch (e) { toast(apiDetail(e), "error", 5000); }
+    await refreshTelegram();
+  };
+  chat.onchange = () => set({ chat: chat.checked });
+  library.onchange = () => set({ library: library.checked });
   test.onclick = async () => {
     test.disabled = true;
     try { await api.tgTest(); toast("Test sent", "success", 2000); }
@@ -1261,6 +1274,8 @@ const PALETTE_COMMANDS = [
   { ico: "📚", label: "Library", desc: "search, read, manage saved sources", run: () => openLibrary() },
   { ico: "⏱", label: "Routines", desc: "scheduled tasks and their results", run: () => Routines.open() },
   { ico: "⏱", label: "New routine from a sentence", desc: "/routine <what and when>", run: () => prefillComposer("/routine ") },
+  { ico: "👁", label: "Watch a page", desc: "alert me when it changes", run: () => Routines.watchPage() },
+  { ico: "⚡", label: "Skills", desc: "/name <message>", run: () => Skills.open() },
   { ico: "⚙", label: "Settings", desc: "model, prompts, key", run: () => openSettings() },
 ];
 
@@ -1441,7 +1456,8 @@ function bindDialogDismiss() {
 }
 
 // ─────────────────────── Main ───────────────────────
-const Routines = initRoutines({ $, el, api, toast });
+const Skills = initSkills({ $, el, api, toast });
+const Routines = initRoutines({ $, el, api, toast, skills: Skills });
 
 async function boot() {
   bindTopbar();

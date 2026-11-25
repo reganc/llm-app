@@ -18,6 +18,7 @@ import memory as mem
 import ollama as oll
 import rewrite
 import search
+import skills
 import x_search
 from auth import verify_api_key
 from config import CFG, get_active_model, get_search_always
@@ -124,6 +125,8 @@ class ChatRequest(BaseModel):
     # Native tool calling (agent.py): the model decides when to search. None
     # falls back to AGENT_TOOLS. Ignored with response_format or a /command.
     agent: bool | None = None
+    # A saved skill to follow; "/name …" as the last message does the same.
+    skill: str | None = Field(default=None, max_length=40)
 
     model_config = {"extra": "ignore"}
 
@@ -750,7 +753,8 @@ def _with_tool_guidance(messages: list[dict]) -> list[dict]:
 
 
 async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, *,
-                            use_search: bool, use_memory: bool):
+                            use_search: bool, use_memory: bool,
+                            skill: dict | None = None):
     """/v1/chat/completions via the tool-calling loop (see agent.py).
 
     Memory is still pre-fetched (relevance-gated, with library-intent and
@@ -791,6 +795,7 @@ async def _agent_completion(req: ChatRequest, clean: str, retrieval_query: str, 
     messages = _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
     if tools:
         messages = _with_tool_guidance(messages)
+    messages = skills.apply(messages, skill)
     best_score = max((c.get("score", 0) for c in chunks), default=0)
     messages = _inject_context(messages, search_block=search_block,
                                memory_block=memory_block,
@@ -899,6 +904,13 @@ async def chat_completions(req: ChatRequest):
     fmt = _ollama_format(req.response_format)
 
     raw_query = req.messages[-1].text() if req.messages else ""
+    skill = None
+    if inject_system:
+        raw_query, skill = skills.split(raw_query)
+        if skill:
+            req.messages[-1] = Message(role="user", content=raw_query)
+        elif req.skill and (skill := skills.get(req.skill)) is None:
+            raise HTTPException(404, "skill not found")
     clean, command, _ = _parse_command(raw_query)
     if command:
         req.messages[-1] = Message(role="user", content=clean)
@@ -922,7 +934,8 @@ async def chat_completions(req: ChatRequest):
     )
     if use_agent:
         return await _agent_completion(req, clean, retrieval_query,
-                                       use_search=use_search, use_memory=use_memory)
+                                       use_search=use_search, use_memory=use_memory,
+                                       skill=skill)
     search_result, chunks, two_pass, intent_signals, command = await _resolve_context(
         retrieval_query, command, req.stream, allow_two_pass,
         use_search=use_search, use_memory=use_memory, store=req.store,
@@ -932,6 +945,7 @@ async def chat_completions(req: ChatRequest):
         _inject_messages(req.messages, req.system_prompt_key, search_capable=False)
         if inject_system else [m.model_dump() for m in req.messages]
     )
+    messages = skills.apply(messages, skill)
 
     library_primary = command == "library"
     # When the user explicitly typed /search or /x, the *fresh* results are
@@ -1199,7 +1213,8 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
-    clean, command, _ = _parse_command(req.content)
+    content, skill = skills.split(req.content)
+    clean, command, _ = _parse_command(content)
     conv = conv_store.append_message(conv_id, "user", clean)
 
     fresh_system = build_system(conv.get("system_prompt_key"))
@@ -1207,6 +1222,7 @@ async def conversation_message(conv_id: str, req: ConversationMessageRequest):
         {**m, "content": fresh_system} if m["role"] == "system" else m
         for m in conv["messages"]
     ]
+    base = skills.apply(base, skill)
 
     allow_two_pass = CFG.search_enabled and not req.stream and not command
     retrieval_query = await _retrieval_query(

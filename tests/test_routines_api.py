@@ -187,3 +187,20 @@ def test_saving_a_routine_from_before_extra_sites_keeps_its_memory(c):
     assert same["remembers"] == 1
     changed = c.patch(url, json={"sources": {**old, "extra_sites": True}}, headers=AUTH).json()
     assert changed["remembers"] == 0
+
+
+def test_a_routine_can_use_a_saved_skill(c, tmp_path):
+    import skills
+    skills.load(tmp_path / "skills.json")
+    skills._save({"brief": {"name": "brief", "description": "", "instructions": "x"}})
+    try:
+        assert c.post("/v1/routines", json={**BODY, "skill": "nope"}, headers=AUTH).status_code == 422
+        got = c.post("/v1/routines", json={**BODY, "skill": "Brief"}, headers=AUTH).json()
+        assert got["skill"] == "brief"
+        url = f"/v1/routines/{got['id']}"
+        store.set_memory(got["id"], {"urls": ["u"], "titles": [], "reports": []})
+        assert c.patch(url, json={"skill": None}, headers=AUTH).json()["skill"] is None
+        assert c.get(url, headers=AUTH).json()["remembers"] == 0      # a different task now
+        assert c.patch(url, json={"skill": "nope"}, headers=AUTH).status_code == 422
+    finally:
+        skills.load(tmp_path / "none.json")

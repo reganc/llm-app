@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
 
 import agent
@@ -20,6 +21,7 @@ import routine_check
 import routine_query
 import routine_store as store
 import search
+import skills
 import x_search
 from config import CFG, get_active_model
 from prompts import build_system, search_block_prompt
@@ -39,7 +41,7 @@ _MEMORY_TITLES = 100
 _MEMORY_REPORTS = 3
 _MEMORY_REPORT_CHARS = 1200
 # Changing any of these makes it a different task, so its memory is dropped.
-TASK_FIELDS = ("prompt", "query", "sources")
+TASK_FIELDS = ("prompt", "query", "sources", "skill")
 
 _GUIDANCE = (
     "\n\nThis is a scheduled task running unattended: nobody can answer a "
@@ -70,6 +72,8 @@ _ONLY_NEW_NEWS = (
     " Stories already reported were removed from the results. If none of the results left "
     "fits the task, reply with exactly NOTHING_NEW and nothing else."
 )
+
+Done = Callable[[dict], Awaitable[None]]
 
 _lock = asyncio.Lock()            # one run at a time: one GPU, one shared model
 _active: set[str] = set()         # routine ids queued or running
@@ -128,6 +132,7 @@ def _messages(routine: dict, block: str | None, tools: list[dict],
     system += _GUIDANCE.format(now=local.strftime("%A, %B %d, %Y, %H:%M %Z"))
     if tools:
         system += _FAITHFUL
+    system += skills.prompt(skills.get(routine.get("skill")))
     # News is compared in code (stories removed before the model sees them). Shown
     # its earlier reports, the model repeated an old story under a wrong citation.
     compare = bool(memory["reports"]) and not routine["sources"].get("news")
@@ -234,11 +239,12 @@ async def _execute(routine: dict) -> dict:
     return out
 
 
-async def run_routine(routine_id: str, trigger: str) -> None:
+async def run_routine(routine_id: str, trigger: str) -> dict | None:
+    """The finished run, or None if the routine was deleted while it queued."""
     async with _lock:
         routine = store.get(routine_id)
-        if routine is None:  # deleted while queued
-            return
+        if routine is None:
+            return None
         run = store.start_run(routine_id, trigger)
         try:
             fields = await asyncio.wait_for(_execute(routine), timeout=RUN_TIMEOUT_S)
@@ -259,6 +265,7 @@ async def run_routine(routine_id: str, trigger: str) -> None:
             _remember(routine, fields)
     previous = next((r["status"] for r in routine["runs"] if r["status"] != "running"), None)
     await _notify(routine, {**run, **fields}, previous)
+    return {**run, **fields}
 
 
 def _remember(routine: dict, fields: dict) -> None:
@@ -274,8 +281,9 @@ async def _notify(routine: dict, run: dict, previous_status: str | None) -> None
     """Best effort: the result is already saved, and a failure is recorded on it."""
     if not notify.should_notify(routine, run, previous_status):
         return
+    message_id = None
     try:
-        await notify.send(notify.message(routine, run))
+        message_id = await notify.send(notify.message(routine, run))
         outcome = "sent"
     except notify.NotifyError as e:
         outcome = f"failed: {e}"
@@ -283,25 +291,44 @@ async def _notify(routine: dict, run: dict, previous_status: str | None) -> None
         outcome = f"failed: {type(e).__name__}"
     if outcome != "sent":
         log.warning("routine %s: notification %s", routine["id"], outcome)
-    store.annotate_run(routine["id"], run["id"], {"notified": outcome})
+    store.annotate_run(routine["id"], run["id"], {"notified": outcome,
+                                                  "telegram_message_id": message_id})
 
 
-async def _run_tracked(routine_id: str, trigger: str) -> None:
+async def _run_tracked(routine_id: str, trigger: str, done: Done | None = None) -> None:
     try:
-        await run_routine(routine_id, trigger)
+        run = await run_routine(routine_id, trigger)
     finally:
         _active.discard(routine_id)
+    if done and run:
+        await done(run)
 
 
-def start_manual(routine_id: str) -> bool:
-    """Queue a run now. False if this routine is already queued or running."""
+def start_manual(routine_id: str, done: Done | None = None) -> bool:
+    """Queue a run now. False if this routine is already queued or running. `done` is
+    given the finished run."""
     if routine_id in _active:
         return False
     _active.add(routine_id)
-    task = asyncio.get_running_loop().create_task(_run_tracked(routine_id, "manual"))
+    task = asyncio.get_running_loop().create_task(_run_tracked(routine_id, "manual", done))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
     return True
+
+
+def upcoming(fields: dict) -> str | None:
+    """When a routine with these fields next runs."""
+    if not fields["enabled"]:
+        return None
+    return next_run(Schedule(**fields["schedule"]), _now(), fields["timezone"]).isoformat(timespec="seconds")
+
+
+def set_enabled(routine_id: str, enabled: bool) -> dict | None:
+    current = store.get(routine_id)
+    if current is None:
+        return None
+    return store.update(routine_id, {"enabled": enabled,
+                                     "next_run_at": upcoming({**current, "enabled": enabled})})
 
 
 # ── scheduler ────────────────────────────────────────────────────────────────
