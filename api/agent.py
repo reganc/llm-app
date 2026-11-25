@@ -109,6 +109,9 @@ class Trace:
     web_results: list[dict] = field(default_factory=list)    # search_and_ingest results
     web_queries: list[str] = field(default_factory=list)
     library_chunks: list[dict] = field(default_factory=list)
+    # Marker -> {"title","url"}, built from the results themselves (never from
+    # page text, which could imitate a header line).
+    sources: dict[str, dict] = field(default_factory=dict)
     rounds: int = 0
     # Set when the answer cited markers it was never shown (see _repair).
     repair: dict | None = None
@@ -131,6 +134,24 @@ class Trace:
         out = _MARKER_RE.sub(shift, block)
         self.markers = seen
         return out
+
+    def add_web_sources(self, results: list[dict]) -> None:
+        """Record what each marker in the next web block refers to. Must run
+        before `renumber`, whose offsets it mirrors; results keep the order
+        search_and_ingest numbered them in."""
+        counts = {"W": 0, "X": 0, "A": 0}
+        for r in results:
+            kind = {"x_twitter": "X", "auxiliary_site": "A"}.get(r.get("engine") or "", "W")
+            counts[kind] += 1
+            self._add_source(kind, counts[kind], r.get("title"), r.get("url"))
+
+    def add_library_sources(self, chunks: list[dict]) -> None:
+        for i, c in enumerate(chunks, 1):
+            self._add_source("L", i, c.get("title"), c.get("identifier"))
+
+    def _add_source(self, kind: str, n: int, title: str | None, url: str | None) -> None:
+        marker = f"{kind}{self.markers[kind] + n}"
+        self.sources[marker] = {"title": title or url or marker, "url": url or ""}
 
     def web_summary(self) -> dict | None:
         if not self.web_queries:
@@ -170,13 +191,17 @@ def _validate(name: str, args: dict | None, allowed: set[str]) -> tuple[str | No
     return query, ""
 
 
-async def _web_search(query: str, trace: Trace, *, store: bool) -> str:
-    result = await search.search_and_ingest(query, store_memory=store)
+async def _web_search(query: str, trace: Trace, *, store: bool,
+                      news: bool = False) -> str:
+    extra = {"news": True} if news else {}
+    result = await search.search_and_ingest(query, store_memory=store, **extra)
     trace.web_queries.append(query)
     text = result.get("context_text") or ""
     if result.get("error") or not text.strip():
         return f"No web results for {query!r}."
-    trace.web_results.extend(result.get("results") or [])
+    results = result.get("results") or []
+    trace.web_results.extend(results)
+    trace.add_web_sources(results)
     return trace.renumber(text)
 
 
@@ -186,6 +211,7 @@ async def _library_search(query: str, trace: Trace) -> str:
     if not chunks:
         return f"No relevant library entries for {query!r}."
     trace.library_chunks.extend(chunks)
+    trace.add_library_sources(chunks)
     block = mem.build_context_block(chunks, max_chars=_LIBRARY_CHARS, query=query)
     return trace.renumber(block)
 
@@ -218,16 +244,17 @@ async def execute(call: dict, trace: Trace, *, allowed: set[str], store: bool) -
     return {"role": "tool", "tool_name": name or "unknown", "content": content}
 
 
-async def prefetch_web(query: str, trace: Trace, *, store: bool) -> str | None:
+async def prefetch_web(query: str, trace: Trace, *, store: bool,
+                       news: bool = False) -> str | None:
     """Run a web search before the first model call (deterministic intent,
-    e.g. "latest"/"today"). Recorded like a tool call — numbered, deduped,
+    e.g. "latest"/"today"). `news` limits it to recent stories. Recorded like a tool call — numbered, deduped,
     counted against the budget. Returns the block, or None if no results."""
     key = ("web_search", " ".join(query.split()).lower())
     if key in trace.seen:
         return None
     trace.seen.add(key)
     try:
-        block = await _web_search(" ".join(query.split()), trace, store=store)
+        block = await _web_search(" ".join(query.split()), trace, store=store, news=news)
         status = "ok"
     except Exception as e:
         log.warning("pre-search failed: %s", e)
@@ -250,6 +277,12 @@ def invalid_citations(text: str, markers: dict[str, int]) -> list[str]:
             if not 1 <= int(num) <= markers.get(kind, 0):
                 bad.add(f"{kind}{num}")
     return sorted(bad)
+
+
+def cited_markers(text: str) -> list[str]:
+    """Every marker cited in `text`, in order, including grouped ones."""
+    return [f"{kind}{num}" for group in _CITE_GROUP_RE.finditer(text)
+            for kind, num in _CITE_ONE_RE.findall(group.group(2))]
 
 
 def strip_citations(text: str, invalid: list[str]) -> str:

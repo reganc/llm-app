@@ -39,6 +39,10 @@ llm-app/
 │   ├── memory.py               # embedded ChromaDB + RAG
 │   ├── search.py               # SearXNG/DDG + auto-search decision
 │   ├── x_search.py             # X/Twitter via x-cli
+│   ├── routines.py             # /v1/routines API
+│   ├── routine_runner.py       # routine scheduler + execution
+│   ├── routine_store.py        # routines + run history (JSON files)
+│   ├── routine_schedule.py     # when a routine runs
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
 │   ├── chat.py                 # /v1/chat/completions, /reasoning, /conversations
@@ -138,6 +142,9 @@ Coverage:
 | `test_context_block_markers.py` | stale `[W#]/[L#]` markers in stored text are stripped before reaching the model, so `Trace.renumber` can't count them as shown |
 | `test_agent.py` | tool loop core — round/call bounds, forced final answer, arg validation, duplicate suppression, tool-error containment, marker renumbering, streaming |
 | `test_agent_endpoint.py` | agent mode on `/v1/chat/completions` — opt-in/out, bypasses (response_format, raw, /commands, library mode), metadata, `store:false`, SSE event order |
+| `test_x_search.py` | X failures are typed (expired login, rate limit, timeout), never "no results"; dead login skipped in background; `/x` falls back to the web and says so |
+| `test_routine_schedule.py` · `test_routine_store.py` · `test_routine_runner.py` · `test_routines_api.py` | routines: DST/weekday math, atomic bounded storage, crash recovery, missed-run skip, one run at a time, source mapping, unsourced labelling, API |
+| `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
 
@@ -178,6 +185,18 @@ arrives as `event: llm.replace` (the SPA swaps the message text) and the
 corrected text is what gets stored.
 No `fetch_url` tool yet — model-chosen URLs on an internet-exposed server need
 an SSRF allowlist first.
+
+**Routines** (`api/routine*.py`, UI in `static/routines.js`): a saved prompt +
+schedule (daily on chosen weekdays, or every N hours) run unattended through the
+agent loop, with results in an inbox. Boundary: **routines only read** — the
+agent's `web_search`/`library_search`, nothing that sends, writes or runs
+commands — and use `store:false`, so they never write to memory. A web search
+always runs first (`sources.news` limits it to recent stories via
+`SEARXNG_NEWS_ENGINES`); the status is set in code, not by the model: `ok` needs
+citations that map to results a tool really returned (`Trace.sources`),
+otherwise `unsourced`. One run at a time; the next run time is saved before a
+run starts; a run found more than an hour late is recorded as `missed`, never
+caught up. Stored as JSON in `DATA_DIR/routines/` (30 runs kept each).
 
 **Evals** (`evals/`, see its README): 29 golden cases scored against the live
 stack — `python evals/run.py [--mode stream] [--compare <results.json>]`.
@@ -228,6 +247,7 @@ flag False and are unchanged.
 - `GET/POST/DELETE /v1/search/auxiliary-sites` — Manage sites always fetched alongside searches
 - `GET  /v1/search/x/status` · `POST /v1/search/x` — X/Twitter search
 - `GET  /v1/memory/stats` · `GET /v1/memory/search` · `DELETE /v1/memory/source/{id}` · `POST /v1/memory/ingest` · `POST /v1/memory/wipe`
+- `GET/POST /v1/routines` · `GET/PATCH/DELETE /v1/routines/{id}` · `POST /v1/routines/{id}/run` · `GET /v1/routines/inbox` · `POST /v1/routines/inbox/read` · `POST /v1/routines/{id}/runs/{run_id}/read` — scheduled tasks and their results
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
@@ -260,7 +280,11 @@ flag False and are unchanged.
 | `SEARCH_ALWAYS` | `false` | Force search on every query (vs. auto-decision). Default only: the SPA's "Always search the web" setting (`search_always` in settings.json) overrides it. Agent mode runs the search before the first model call |
 | `SEARXNG_ENGINES` | `google cse,duckduckgo` | SearXNG engines asked per query. Reachability drifts per IP — watch the `searxng unresponsive engines` log |
 | `SEARXNG_FALLBACK_ENGINES` | `bing,google,brave` | Asked only when the primary engines return nothing (Bing outranks better engines with off-topic hits when mixed in). Empty disables |
-| `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli |
+| `SEARXNG_NEWS_ENGINES` | `bing news` | Engines for "recent news" routines (last day, then week, then a normal search) |
+| `ROUTINES_ENABLED` | `true` | Run routines on schedule; `false` leaves "run now" working |
+| `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
+| `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |
+| `X_CLI_SRC` | `~/x-cli` | x-cli source checkout used at image build (its GitHub repo is gone) |
 | `FIRECRAWL_URL` | `http://host.docker.internal:3002` | Optional web scraping |
 
 ## Troubleshooting

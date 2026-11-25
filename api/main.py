@@ -25,6 +25,7 @@ import finetune
 import memory as mem
 import ollama as oll
 import refine
+import routine_runner
 import search
 from admin_routes import router as admin_router
 from chat import metrics
@@ -35,6 +36,7 @@ from feedback import router as feedback_router
 from finetune import router as finetune_router
 from ingest import router as ingest_router
 from refine import router as refine_router
+from routines import router as routines_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,10 +59,12 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_warmup())
     distill_task = asyncio.create_task(distill.scheduler_loop())
     refine_task = asyncio.create_task(refine.scheduler_loop())
+    routines_task = asyncio.create_task(routine_runner.scheduler_loop())
     try:
         yield
     finally:
-        for t in (distill_task, refine_task):
+        await routine_runner.shutdown()
+        for t in (distill_task, refine_task, routines_task):
             t.cancel()
             try:
                 await t
@@ -178,6 +182,7 @@ app.include_router(finetune_router)
 app.include_router(feedback_router)
 app.include_router(distill_router)
 app.include_router(refine_router)
+app.include_router(routines_router)
 
 
 # ── Health / metrics (no auth) ───────────────────────────────────────────────

@@ -35,6 +35,11 @@
           <span>Library</span>
           <span id="memoryCount" class="count">0</span>
         </button>
+        <button id="routinesBtn" class="ghost-btn full" title="Routines — scheduled tasks and their results">
+          <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="5.8" stroke="currentColor" fill="none" stroke-width="1.3"/><path d="M8 4.6V8l2.4 1.5" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Routines</span>
+          <span id="routinesCount" class="count unread" hidden>0</span>
+        </button>
         <button id="settingsBtn" class="ghost-btn full" title="Settings">
           <svg viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="2.4" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M8 1v2.2M8 12.8V15M3.05 3.05l1.55 1.55M11.4 11.4l1.55 1.55M1 8h2.2M12.8 8H15M3.05 12.95l1.55-1.55M11.4 4.6l1.55-1.55" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <span>Settings</span>
@@ -292,6 +297,63 @@
       </section>
     </div>
   </dialog>
+
+  <!-- Modal: Routines -->
+  <dialog id="routinesModal" class="modal library">
+    <header class="library-head">
+      <div class="library-head-left">
+        <h3>Routines</h3>
+        <span id="routinesStats" class="muted-small">…</span>
+      </div>
+      <div class="library-head-right">
+        <button type="button" id="routinesNewBtn" class="ghost-btn">
+          <svg viewBox="0 0 16 16" width="13" height="13"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <span>New routine</span>
+        </button>
+        <button type="button" class="icon-btn" data-close="routinesModal" title="Close">×</button>
+      </div>
+    </header>
+    <div class="library-body">
+      <aside class="library-list-pane">
+        <div id="routinesList" class="library-list"></div>
+      </aside>
+      <section id="routinesDetail" class="library-detail"></section>
+    </div>
+  </dialog>
+
+  <template id="routineFormTpl">
+    <form class="routine-form">
+      <label class="field"><span>Name</span>
+        <input name="name" required maxlength="80" placeholder="Morning AI news" autocomplete="off" /></label>
+      <label class="field"><span>What should it do?</span>
+        <textarea name="prompt" rows="5" required maxlength="2000" placeholder="Summarize the most important AI news from the last day in five bullets, with sources."></textarea></label>
+      <div class="field"><span>Use</span>
+        <div class="check-row">
+          <label><input type="checkbox" name="web" /> Web search</label>
+          <label><input type="checkbox" name="library" /> My library</label>
+        </div></div>
+      <div class="query-field check-row">
+        <label><input type="checkbox" name="news" /> Recent news only (last day, then last week)</label></div>
+      <label class="field query-field"><span>Search for <small class="muted">(optional, defaults to the task)</small></span>
+        <input name="query" maxlength="300" placeholder="AI news today" autocomplete="off" /></label>
+      <div class="field-grid">
+        <label class="field"><span>Repeat</span>
+          <select name="kind"><option value="daily">On certain days</option><option value="interval">Every few hours</option></select></label>
+        <label class="field"><span>Time zone</span>
+          <input name="timezone" required autocomplete="off" /></label>
+      </div>
+      <div class="daily-fields">
+        <label class="field"><span>Time</span><input type="time" name="time" required /></label>
+        <div class="field"><span>Days</span><div class="day-picker" role="group" aria-label="Days"></div></div>
+      </div>
+      <label class="field interval-fields"><span>Every how many hours?</span>
+        <input type="number" name="hours" min="1" max="168" required /></label>
+      <div class="modal-actions">
+        <button type="button" class="ghost-btn cancel">Cancel</button>
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+    </form>
+  </template>
 
   <!-- Modal: Add URL -->
   <dialog id="urlIngestModal" class="modal">

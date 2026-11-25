@@ -1,5 +1,7 @@
 // Local AI — single-page app
 // No build step, no framework. Vanilla ES modules.
+import { escHtml, renderMd } from "./md.js";
+import { initRoutines } from "./routines.js";
 
 // ─────────────────────── State ───────────────────────
 const State = {
@@ -155,55 +157,6 @@ const api = {
       .then(async r => { if (!r.ok) throw new Error(await r.text()); return r.json(); });
   },
 };
-
-// ─────────────────────── Markdown (minimal) ───────────────────────
-const escHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-function renderMd(text) {
-  if (!text) return "";
-  const blocks = [];
-  // Extract fenced code blocks first
-  let stash = [];
-  text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    const i = stash.length;
-    stash.push(`<pre><code class="lang-${escHtml(lang)}">${escHtml(code.trimEnd())}</code></pre>`);
-    return `\u0000CODE${i}\u0000`;
-  });
-  // Inline code
-  text = text.replace(/`([^`\n]+)`/g, (_, c) => `<code>${escHtml(c)}</code>`);
-  // Headings
-  text = text.replace(/^### (.+)$/gm, "<h3>$1</h3>");
-  text = text.replace(/^## (.+)$/gm, "<h2>$1</h2>");
-  text = text.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-  // Bold/italic
-  text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  text = text.replace(/(^|[^*])\*([^\s*][^*]*?)\*(?!\*)/g, "$1<em>$2</em>");
-  // Links
-  text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Bare URLs
-  text = text.replace(/(^|\s)(https?:\/\/[^\s<]+)/g,
-    '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
-  // Blockquote
-  text = text.replace(/^> (.+)$/gm, "<blockquote>$1</blockquote>");
-  // Lists (simple)
-  text = text.replace(/^(?:[-*] .+(?:\n|$))+/gm, (m) => {
-    const items = m.trim().split("\n").map(l => l.replace(/^[-*] /, ""));
-    return "<ul>" + items.map(i => `<li>${i}</li>`).join("") + "</ul>";
-  });
-  text = text.replace(/^(?:\d+\. .+(?:\n|$))+/gm, (m) => {
-    const items = m.trim().split("\n").map(l => l.replace(/^\d+\.\s+/, ""));
-    return "<ol>" + items.map(i => `<li>${i}</li>`).join("") + "</ol>";
-  });
-  // Paragraphs
-  text = text.split(/\n{2,}/).map(p => {
-    if (/^<(h\d|ul|ol|pre|blockquote)/.test(p.trim())) return p;
-    return "<p>" + p.replace(/\n/g, "<br>") + "</p>";
-  }).join("\n");
-  // Restore code blocks
-  text = text.replace(/\u0000CODE(\d+)\u0000/g, (_, i) => stash[+i]);
-  return text;
-}
 
 // ─────────────────────── Rendering ───────────────────────
 function renderConvList() {
@@ -983,7 +936,9 @@ async function refreshXStatus() {
   try {
     const s = await api.xStatus();
     $("#xStatus").textContent = s.ready
-      ? "Ready — /x <query> to search."
+      ? (s.auth_ok ? "Ready — /x <query> to search."
+        : "Set up — the login is checked on the next X search.")
+      : s.auth_ok === false ? (s.last_error || "X login has expired.")
       : `Not ready (binary: ${s.binary_found ? "✓" : "✗"}, creds: ${s.creds_found ? "✓" : "✗"}, enabled: ${s.enabled ? "✓" : "✗"}). Run x-cli auth login on host and set X_SEARCH_ENABLED=true.`;
   } catch { $("#xStatus").textContent = "Status unavailable."; }
 }
@@ -1252,6 +1207,7 @@ const PALETTE_COMMANDS = [
   { ico: "🔍", label: "Search the web", desc: "/search <q>", run: () => prefillComposer("/search ") },
   { ico: "𝕏", label: "Search X / Twitter", desc: "/x <q>", run: () => prefillComposer("/x ") },
   { ico: "📚", label: "Library", desc: "search, read, manage saved sources", run: () => openLibrary() },
+  { ico: "⏱", label: "Routines", desc: "scheduled tasks and their results", run: () => Routines.open() },
   { ico: "⚙", label: "Settings", desc: "model, prompts, key", run: () => openSettings() },
 ];
 
@@ -1432,6 +1388,8 @@ function bindDialogDismiss() {
 }
 
 // ─────────────────────── Main ───────────────────────
+const Routines = initRoutines({ $, el, api, toast });
+
 async function boot() {
   bindTopbar();
   bindComposer();
@@ -1446,7 +1404,8 @@ async function boot() {
     promptApiKey();
     return;
   }
-  await Promise.all([refreshSettings(), refreshConvs(), refreshHealth(), refreshAuxList()]);
+  await Promise.all([refreshSettings(), refreshConvs(), refreshHealth(), refreshAuxList(),
+    Routines.refreshUnread()]);
   renderLastSearch();
   newQuickChat();
 }

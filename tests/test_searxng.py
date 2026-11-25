@@ -119,3 +119,32 @@ def test_fallback_use_is_logged(monkeypatch, caplog):
         asyncio.run(search.searxng_search("q", 5))
     assert any("fallback" in r.getMessage() and "bing" in r.getMessage()
                for r in caplog.records)
+
+
+def _news(n):
+    return {"results": [{"title": f"Story {i}", "url": f"https://n/{i}", "content": "c",
+                         "engine": "bing news"} for i in range(n)]}
+
+
+def test_news_search_asks_the_news_engines_for_the_last_day(monkeypatch):
+    sent = _patch(monkeypatch, _news(8), searxng_news_engines="bing news")
+    out = asyncio.run(search.searxng_news("ai", 8))
+    assert len(out) == 8 and len(sent) == 1
+    assert sent[0]["engines"] == "bing news" and sent[0]["time_range"] == "day"
+
+
+def test_thin_news_widens_to_a_week(monkeypatch):
+    sent = _patch(monkeypatch, _news(1), _news(6), searxng_news_engines="bing news")
+    assert len(asyncio.run(search.searxng_news("ai", 8))) == 6
+    assert [s["time_range"] for s in sent] == ["day", "week"]
+
+
+def test_no_news_falls_back_to_the_normal_search(monkeypatch):
+    sent = _patch(monkeypatch, EMPTY, EMPTY, RESULTS)
+    out = asyncio.run(search.searxng_news("ai", 8))
+    assert out[0]["url"] == "https://w/a" and "time_range" not in sent[2]
+
+
+def test_a_day_of_thin_news_beats_an_empty_week(monkeypatch):
+    _patch(monkeypatch, _news(1), EMPTY)
+    assert len(asyncio.run(search.searxng_news("ai", 8))) == 1

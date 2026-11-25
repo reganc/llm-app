@@ -50,6 +50,7 @@ class Config:
     searxng_url: str
     searxng_engines: str
     searxng_fallback_engines: str
+    searxng_news_engines: str
     auto_search_threshold: float
     search_results: int
     search_fetch_timeout: int
@@ -66,6 +67,9 @@ class Config:
     max_inject_chars: int
     num_ctx: int
     agent_tools: bool
+
+    routines_enabled: bool
+    routine_timezone: str
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -108,6 +112,8 @@ CFG = Config(
     # Asked only when SEARXNG_ENGINES returns nothing. Bing lives here because
     # it outranks better engines with off-topic hits. Empty disables.
     searxng_fallback_engines=os.getenv("SEARXNG_FALLBACK_ENGINES", "bing,google,brave"),
+    # Asked for "recent news" routines, limited to the last day, then week.
+    searxng_news_engines=os.getenv("SEARXNG_NEWS_ENGINES", "bing news"),
     auto_search_threshold=float(os.getenv("AUTO_SEARCH_THRESHOLD", "0.35")),
     search_results=int(os.getenv("SEARCH_RESULTS", "5")),
     search_fetch_timeout=int(os.getenv("SEARCH_FETCH_TIMEOUT", "15")),
@@ -124,6 +130,10 @@ CFG = Config(
     # the auto-search router + [SEARCH:] sentinel. On by default; set false to
     # fall back to the legacy path. Per-request `agent` wins either way.
     agent_tools=os.getenv("AGENT_TOOLS", "true").lower() == "true",
+    # Scheduled routines (routine_runner.py). False stops the schedule; the
+    # API and "run now" keep working.
+    routines_enabled=os.getenv("ROUTINES_ENABLED", "true").lower() == "true",
+    routine_timezone=os.getenv("ROUTINE_TIMEZONE", "America/Chicago"),
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

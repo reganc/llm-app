@@ -132,6 +132,7 @@ services:
       - AGENT_TOOLS=${AGENT_TOOLS:-true}
       - SEARXNG_ENGINES=${SEARXNG_ENGINES:-google cse,duckduckgo}
       - SEARXNG_FALLBACK_ENGINES=${SEARXNG_FALLBACK_ENGINES-bing,google,brave}
+      - SEARXNG_NEWS_ENGINES=${SEARXNG_NEWS_ENGINES:-bing news}
       # Background schedulers
       #   Default mode is "window": run back-to-back batches inside the
       #   nightly [start, end] window until the backlog drains, then idle
@@ -149,6 +150,9 @@ services:
       - DISTILL_BATCH_PAUSE_S=${DISTILL_BATCH_PAUSE_S:-30}
       - DISTILL_AT=${DISTILL_AT:-03:00}
       - DISTILL_TIMEZONE=${DISTILL_TIMEZONE:-America/Chicago}
+      # Scheduled routines (false stops the schedule; "run now" still works)
+      - ROUTINES_ENABLED=${ROUTINES_ENABLED:-true}
+      - ROUTINE_TIMEZONE=${ROUTINE_TIMEZONE:-America/Chicago}
       # Web search
       - SEARCH_ENABLED=true
       - SEARCH_ALWAYS=false

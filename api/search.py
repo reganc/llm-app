@@ -258,11 +258,12 @@ def remove_aux_site(url: str) -> bool:
 
 # ── SearXNG / DDG ────────────────────────────────────────────────────────────
 async def _searxng_query(client: httpx.AsyncClient, query: str,
-                         engines: str, num: int) -> list[dict]:
-    r = await client.get(
-        f"{CFG.searxng_url}/search",
-        params={"q": query, "format": "json", "engines": engines, "lang": "en"},
-    )
+                         engines: str, num: int,
+                         time_range: str | None = None) -> list[dict]:
+    params = {"q": query, "format": "json", "engines": engines, "lang": "en"}
+    if time_range:
+        params["time_range"] = time_range
+    r = await client.get(f"{CFG.searxng_url}/search", params=params)
     r.raise_for_status()
     body = r.json()
     # SearXNG degrades silently: a blocked engine just contributes
@@ -295,6 +296,30 @@ async def searxng_search(query: str, num: int) -> list[dict]:
     except Exception as e:
         log.warning("searxng failed: %s — falling back to DDG", e)
         return await _ddg(query, num)
+
+
+# Fewer dated stories than this in the last day and the search widens.
+_MIN_NEWS = 3
+_NEWS_RESULTS = 8
+
+
+async def searxng_news(query: str, num: int) -> list[dict]:
+    """Dated news stories: last day, then last week, then an ordinary search.
+
+    The ordinary engines answer "AI news today" with section pages (Reuters'
+    AI index), which name no actual story."""
+    best: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0, headers=_SEARXNG_HEADERS) as client:
+            for time_range in ("day", "week"):
+                out = await _searxng_query(client, query, CFG.searxng_news_engines,
+                                           num, time_range)
+                best = max(best, out, key=len)
+                if len(best) >= _MIN_NEWS:
+                    return best
+    except Exception as e:
+        log.warning("searxng news search failed: %s", e)
+    return best or await searxng_search(query, num)
 
 
 async def _ddg(query: str, num: int) -> list[dict]:
@@ -348,18 +373,19 @@ async def fetch_aux_sites() -> list[dict]:
 # ── Main pipeline ────────────────────────────────────────────────────────────
 async def search_and_ingest(query: str, *, num_results: int | None = None,
                             store_memory: bool = True,
-                            include_x: bool = True) -> dict:
+                            include_x: bool = True,
+                            news: bool = False) -> dict:
     if not CFG.search_enabled:
         return {"query": query, "results": [], "context_text": "",
                 "stored": 0, "error": "Search disabled"}
 
-    num = num_results or CFG.search_results
+    num = num_results or (_NEWS_RESULTS if news else CFG.search_results)
     retrieved_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     from x_search import search_x  # local import to avoid cycle
 
     raw, aux, x_items = await asyncio.gather(
-        searxng_search(query, num),
+        searxng_news(query, num) if news else searxng_search(query, num),
         fetch_aux_sites(),
         search_x(query) if (include_x and CFG.x_search_enabled) else _empty(),
     )
