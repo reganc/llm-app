@@ -479,11 +479,12 @@ async def _x_or_web(query: str, *, store: bool) -> dict:
 
 
 def _x_notice(search_result: dict | None) -> str:
-    """What the reader must see when X failed and the web was searched instead."""
+    """What the reader must see when X gave nothing and the web was searched instead."""
     error = (search_result or {}).get("x_error")
     if not error:
         return ""
-    return f"**X search is unavailable.** {error} This answer uses web results, not X posts.\n\n"
+    error = error.rstrip(" .") + "."
+    return f"**This answer has no X posts.** {error} Web results were used instead.\n\n"
 
 
 def _with_x_notice(data: dict, search_result: dict | None, *, fmt=None) -> dict:

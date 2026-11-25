@@ -213,7 +213,7 @@ async def search_x(query: str, count: int | None = None) -> list[dict]:
 async def search_x_and_ingest(query: str, *, store_memory: bool = True) -> dict:
     if not CFG.x_search_enabled:
         return {"query": query, "results": [], "context_text": "",
-                "stored": 0, "error": "X search disabled"}
+                "stored": 0, "error": "X search is turned off."}
     try:
         items = await fetch_x(query)
     except XSearchError as e:
@@ -221,7 +221,7 @@ async def search_x_and_ingest(query: str, *, store_memory: bool = True) -> dict:
                 "stored": 0, "error": str(e), "error_kind": e.kind}
     if not items:
         return {"query": query, "results": [], "context_text": "",
-                "stored": 0, "error": "No X results"}
+                "stored": 0, "error": "No X posts matched this search."}
     stored = 0
     if store_memory:
         tasks = [

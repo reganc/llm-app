@@ -205,7 +205,7 @@ def test_notice_is_prefixed_to_the_answer():
     out = chat._with_x_notice(data, FALLBACK)
     text = out["message"]["content"]
     assert text.index("X login expired.") < text.index("People say things.")
-    assert "web" in text and out["message"]["thinking"] == "t"
+    assert "Web results" in text and out["message"]["thinking"] == "t"
     assert data["message"]["content"] == "People say things."   # input untouched
 
 
@@ -256,3 +256,22 @@ def test_stream_records_nothing_if_the_model_said_nothing(monkeypatch):
             {"model": "m"}, search_result=FALLBACK, command="x", message_id="i", on_token=buf.append)]
     run(go())
     assert buf == []
+
+
+@pytest.mark.parametrize("enabled,posts", [(False, None), (True, 0)])
+def test_notice_reads_as_sentences(xenv, monkeypatch, enabled, posts):
+    import chat
+    monkeypatch.setattr(x_search, "CFG",
+                        dataclasses.replace(x_search.CFG, x_search_enabled=enabled))
+    if posts is not None:
+        xenv["procs"] = [Proc(0, json.dumps(tweets_body(posts)).encode())]
+    error = run(x_search.search_x_and_ingest("q", store_memory=False))["error"]
+    assert error.endswith(".")
+    notice = chat._x_notice({"x_error": error})
+    assert f"{error} " in notice and "unavailable" not in notice
+
+
+def test_notice_punctuates_raw_errors_once():
+    import chat
+    assert "failed: HTTP 500. Web" in chat._x_notice({"x_error": "X search failed: HTTP 500"})
+    assert ".." not in chat._x_notice({"x_error": "Done."})
