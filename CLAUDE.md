@@ -44,6 +44,8 @@ llm-app/
 │   ├── routine_store.py        # routines + run history (JSON files)
 │   ├── routine_schedule.py     # when a routine runs
 │   ├── routine_draft.py        # plain language → routine to confirm
+│   ├── routine_query.py        # search phrase worked out from a task
+│   ├── routine_check.py        # keeps only points their sources back
 │   ├── notify.py               # Telegram notifications
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -147,6 +149,7 @@ Coverage:
 | `test_x_search.py` | X failures are typed (expired login, rate limit, timeout), never "no results"; dead login skipped in background; `/x` falls back to the web and says so |
 | `test_routine_schedule.py` · `test_routine_store.py` · `test_routine_runner.py` · `test_routines_api.py` | routines: DST/weekday math, atomic bounded storage, crash recovery, missed-run skip, one run at a time, source mapping, unsourced labelling, API |
 | `test_routine_memory.py` · `test_notify.py` · `test_routine_draft.py` · `test_routine_phrases.py` | only-what's-new, Telegram (content rules, retries, token redaction), plain-language drafts, chat phrase detection (needs node) |
+| `test_routine_query.py` · `test_routine_check.py` · `test_news_search.py` | search phrase from a task, per-point source check, news topic filter/widening/extra sites |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
@@ -195,9 +198,14 @@ agent loop, with results in an inbox. Boundary: **routines only read** — the
 agent's `web_search`/`library_search`, nothing that sends, writes or runs
 commands — and use `store:false`, so they never write to memory. A web search
 always runs first (`sources.news` limits it to recent stories via
-`SEARXNG_NEWS_ENGINES`); the status is set in code, not by the model: `ok` needs
-citations that map to results a tool really returned (`Trace.sources`),
-otherwise `unsourced`. One run at a time; the next run time is saved before a
+`SEARXNG_NEWS_ENGINES`, topped up from the week on a thin day, off-topic stories
+left out; the always-included sites are skipped unless `sources.extra_sites`). It
+searches for `query`, or a phrase `routine_query` picks out of the task: never the
+whole instruction, which returned a soccer table for AI news. The status is set in
+code, not by the model: `routine_check` removes every point that cites nothing or
+whose words mostly don't appear in the text shown for its source (`Trace.texts`),
+and the run is `ok` only if at least half the points remain, else `unsourced` and
+not notified. It can't catch a claim that twists a page it does match. One run at a time; the next run time is saved before a
 run starts; a run found more than an hour late is recorded as `missed`, never
 caught up. Stored as JSON in `DATA_DIR/routines/` (30 runs kept each).
 **Only what's new** (`only_new`): a routine remembers the URLs and text of its

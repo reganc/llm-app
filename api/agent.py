@@ -112,6 +112,11 @@ class Trace:
     # Marker -> {"title","url"}, built from the results themselves (never from
     # page text, which could imitate a header line).
     sources: dict[str, dict] = field(default_factory=dict)
+    # Marker -> the text the model was given for it.
+    texts: dict[str, str] = field(default_factory=dict)
+    # Applied to every web search in this run, including the model's own.
+    news: bool = False
+    include_aux: bool = True
     # Stories to leave out of every web search (URLs in search.norm_url form),
     # and whether a search found nothing else.
     exclude_urls: frozenset[str] = frozenset()
@@ -140,7 +145,7 @@ class Trace:
         self.markers = seen
         return out
 
-    def add_web_sources(self, results: list[dict]) -> None:
+    def add_web_sources(self, results: list[dict], shown: dict[str, str] | None = None) -> None:
         """Record what each marker in the next web block refers to. Must run
         before `renumber`, whose offsets it mirrors; results keep the order
         search_and_ingest numbered them in."""
@@ -148,14 +153,19 @@ class Trace:
         for r in results:
             kind = {"x_twitter": "X", "auxiliary_site": "A"}.get(r.get("engine") or "", "W")
             counts[kind] += 1
-            self._add_source(kind, counts[kind], r.get("title"), r.get("url"))
+            self._add_source(kind, counts[kind], r.get("title"), r.get("url"),
+                             (shown or {}).get(f"{kind}{counts[kind]}"))
 
     def add_library_sources(self, chunks: list[dict]) -> None:
         for i, c in enumerate(chunks, 1):
-            self._add_source("L", i, c.get("title"), c.get("identifier"))
+            self._add_source("L", i, c.get("title"), c.get("identifier"),
+                             f"{c.get('title') or ''}\n{c.get('text') or ''}")
 
-    def _add_source(self, kind: str, n: int, title: str | None, url: str | None) -> None:
+    def _add_source(self, kind: str, n: int, title: str | None, url: str | None,
+                    text: str | None = None) -> None:
         marker = f"{kind}{self.markers[kind] + n}"
+        if text:
+            self.texts[marker] = text
         self.sources[marker] = {"title": title or url or marker, "url": url or ""}
 
     def web_summary(self) -> dict | None:
@@ -196,9 +206,10 @@ def _validate(name: str, args: dict | None, allowed: set[str]) -> tuple[str | No
     return query, ""
 
 
-async def _web_search(query: str, trace: Trace, *, store: bool,
-                      news: bool = False) -> str:
-    extra: dict = {"news": True} if news else {}
+async def _web_search(query: str, trace: Trace, *, store: bool) -> str:
+    extra: dict = {"news": True} if trace.news else {}
+    if not trace.include_aux:
+        extra["include_aux"] = False
     if trace.exclude_urls:
         extra["exclude_urls"] = trace.exclude_urls
     if trace.exclude_titles:
@@ -211,7 +222,7 @@ async def _web_search(query: str, trace: Trace, *, store: bool,
         return f"No web results for {query!r}."
     results = result.get("results") or []
     trace.web_results.extend(results)
-    trace.add_web_sources(results)
+    trace.add_web_sources(results, result.get("shown"))
     return trace.renumber(text)
 
 
@@ -254,17 +265,16 @@ async def execute(call: dict, trace: Trace, *, allowed: set[str], store: bool) -
     return {"role": "tool", "tool_name": name or "unknown", "content": content}
 
 
-async def prefetch_web(query: str, trace: Trace, *, store: bool,
-                       news: bool = False) -> str | None:
+async def prefetch_web(query: str, trace: Trace, *, store: bool) -> str | None:
     """Run a web search before the first model call (deterministic intent,
-    e.g. "latest"/"today"). `news` limits it to recent stories. Recorded like a tool call — numbered, deduped,
+    e.g. "latest"/"today"). Recorded like a tool call — numbered, deduped,
     counted against the budget. Returns the block, or None if no results."""
     key = ("web_search", " ".join(query.split()).lower())
     if key in trace.seen:
         return None
     trace.seen.add(key)
     try:
-        block = await _web_search(" ".join(query.split()), trace, store=store, news=news)
+        block = await _web_search(" ".join(query.split()), trace, store=store)
         status = "ok"
     except Exception as e:
         log.warning("pre-search failed: %s", e)

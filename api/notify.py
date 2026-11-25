@@ -134,12 +134,12 @@ async def send(text: str) -> None:
 # ── what and when ────────────────────────────────────────────────────────────
 
 def should_notify(routine: dict, run: dict, previous_status: str | None) -> bool:
-    """Scheduled results only, and the first of a row of failures."""
+    """Scheduled, sourced results only, and the first of a row of failures."""
     if routine.get("notify", "off") == "off" or run["trigger"] != "schedule":
         return False
     if run["status"] == "error":
         return previous_status != "error"
-    return run["status"] in ("ok", "unsourced")
+    return run["status"] == "ok"
 
 
 def _plain(text: str) -> str:
@@ -164,8 +164,6 @@ def _headline(content: str) -> str:
 def _label(run: dict) -> str:
     if run["status"] == "error":
         return "The run failed. Open llm-app for details."
-    if run["status"] == "unsourced":
-        return "Unsourced result"
     n = len(run.get("sources") or [])
     return f"{n} source{'' if n == 1 else 's'}" if n else "Done"
 

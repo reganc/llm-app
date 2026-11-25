@@ -39,7 +39,7 @@ def test_create_list_get_update_delete(c):
     r = c.post("/v1/routines", json=BODY, headers=AUTH)
     assert r.status_code == 201
     got = r.json()
-    assert got["sources"] == {"web": True, "library": False, "news": False} and got["enabled"] is True
+    assert got["sources"] == {"web": True, "library": False, "news": False, "extra_sites": False} and got["enabled"] is True
     assert got["timezone"] and got["next_run_at"]
     rid = got["id"]
     lst = c.get("/v1/routines", headers=AUTH).json()
@@ -166,3 +166,24 @@ def test_draft_endpoint(c, monkeypatch):
     r = c.post("/v1/routines/draft", json={"text": "every day do x"}, headers=AUTH)
     assert r.json()["routine"]["name"] == "every day do x"
     assert c.get("/v1/routines", headers=AUTH).json()["routines"] == []   # nothing saved
+
+
+def test_search_phrase_is_reported(c):
+    got = c.post("/v1/routines", json=BODY, headers=AUTH).json()
+    assert got["query"] is None and got["search_phrase"] == "AI news"
+    url = f"/v1/routines/{got['id']}"
+    assert c.patch(url, json={"query": "openai"}, headers=AUTH).json()["search_phrase"] == "openai"
+    off = c.patch(url, json={"sources": {"web": False}}, headers=AUTH).json()
+    assert off["search_phrase"] is None
+
+
+def test_saving_a_routine_from_before_extra_sites_keeps_its_memory(c):
+    rid = c.post("/v1/routines", json=BODY, headers=AUTH).json()["id"]
+    old = {"web": True, "library": False, "news": True}
+    store.update(rid, {"sources": old})
+    store.set_memory(rid, {"urls": ["n.example/a"], "titles": [], "reports": []})
+    url = f"/v1/routines/{rid}"
+    same = c.patch(url, json={"sources": {**old, "extra_sites": False}}, headers=AUTH).json()
+    assert same["remembers"] == 1
+    changed = c.patch(url, json={"sources": {**old, "extra_sites": True}}, headers=AUTH).json()
+    assert changed["remembers"] == 0

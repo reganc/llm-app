@@ -152,6 +152,10 @@ export function initRoutines({ $, el, api, toast }) {
       el("summary", { text: `${sources.length} source${sources.length === 1 ? "" : "s"}` }),
       el("ul", {}, sources),
     ]));
+    if (run.removed?.length) children.push(el("details", { class: "run-sources" }, [
+      el("summary", { text: `${run.removed.length} removed` }),
+      el("ul", {}, run.removed.map(p => el("li", { text: `${p.text} (${p.reason})` }))),
+    ]));
     const card = el("article", { class: "run-card" + (run.read || run.status === "running" ? "" : " unread") }, children);
     if (!run.read && run.status !== "running") {
       card.querySelector(".run-head").append(el("button", {
@@ -232,13 +236,14 @@ export function initRoutines({ $, el, api, toast }) {
     }
     const extras = [r.only_new && "only new", r.notify !== "off" && `Telegram ${r.notify}`].filter(Boolean);
     const tools = [r.sources.web && (r.sources.news ? "recent news" : "web"), r.sources.library && "library"].filter(Boolean).join(" + ") || "no tools";
+    const searches = r.search_phrase && `searches “${r.search_phrase}”`;
     const next = r.enabled ? `next ${fmtWhen(r.next_run_at)}` : "paused";
     const body = el("div", { class: "library-content run-list" }, [
       el("blockquote", { class: "routine-prompt", text: r.prompt }),
     ]);
     if (!r.runs.length) body.append(el("p", { class: "muted", text: "No results yet. Use Run now to try it." }));
     for (const run of r.runs) body.append(runCard(run, { routineId: r.id }));
-    detail.replaceChildren(head(r.name, `${describeSchedule(r.schedule)} (${r.timezone}) · ${[next, tools, ...extras].join(" · ")}`, actions), body);
+    detail.replaceChildren(head(r.name, `${describeSchedule(r.schedule)} (${r.timezone}) · ${[next, tools, searches, ...extras].filter(Boolean).join(" · ")}`, actions), body);
   }
 
   // ── form ───────────────────────────────────────────────────────────────────
@@ -264,6 +269,8 @@ export function initRoutines({ $, el, api, toast }) {
     f("web").checked = r ? r.sources.web : true;
     f("library").checked = r ? r.sources.library : false;
     f("news").checked = !!r?.sources.news;
+    f("extra_sites").checked = !!r?.sources.extra_sites;
+    if (r?.search_phrase && !r.query) f("query").placeholder = r.search_phrase;
     f("only_new").checked = !!r?.only_new;
     f("notify").value = r?.notify || "off";
     form.querySelector(".notify-hint").hidden = telegram.ready;
@@ -281,10 +288,11 @@ export function initRoutines({ $, el, api, toast }) {
       form.querySelector(".daily-fields").hidden = f("kind").value !== "daily";
       form.querySelector(".interval-fields").hidden = f("kind").value !== "interval";
       form.querySelectorAll(".query-field").forEach(n => { n.hidden = !f("web").checked; });
+      form.querySelector(".extra-sites-field").hidden = !f("web").checked || !f("news").checked;
       form.querySelector(".notify-full-hint").hidden = f("notify").value !== "full";
       f("hours").disabled = f("kind").value !== "interval";
     };
-    f("kind").onchange = f("web").onchange = f("notify").onchange = sync;
+    f("kind").onchange = f("web").onchange = f("news").onchange = f("notify").onchange = sync;
     sync();
     form.querySelector(".cancel").onclick = () => show(view.id ? { name: "routine", id: view.id } : { name: "inbox" });
     form.onsubmit = async (e) => {
@@ -299,7 +307,8 @@ export function initRoutines({ $, el, api, toast }) {
         timezone: f("timezone").value.trim(),
         schedule: daily ? { kind: "daily", time: f("time").value, days }
           : { kind: "interval", hours: parseInt(f("hours").value, 10) },
-        sources: { web: f("web").checked, library: f("library").checked, news: f("news").checked },
+        sources: { web: f("web").checked, library: f("library").checked, news: f("news").checked,
+          extra_sites: f("news").checked && f("extra_sites").checked },
         only_new: f("only_new").checked,
         notify: f("notify").value,
       };

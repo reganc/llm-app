@@ -24,6 +24,7 @@ def run(c):
 class Env:
     def __init__(self):
         self.payloads, self.replies, self.searches = [], [], []
+        self.page = "Answer claim first later fine"
         self.web = [{"title": "Real", "url": "https://real.example/a", "engine": "searxng"},
                     {"title": "Two", "url": "https://real.example/b", "engine": "searxng"}]
 
@@ -49,7 +50,8 @@ def env(monkeypatch, tmp_path):
         if not e.web:
             return {"error": "No search results returned", "context_text": "", "results": []}
         text = "\n\n".join(f"[W{i}] {r['title']}\nURL: {r['url']}\nbody" for i, r in enumerate(e.web, 1))
-        return {"context_text": text, "results": e.web}
+        return {"context_text": text, "results": e.web,
+                "shown": {f"W{i}": f"{r['title']} {e.page}" for i, r in enumerate(e.web, 1)}}
     monkeypatch.setattr(oll, "chat", chat)
     monkeypatch.setattr(search, "search_and_ingest", fake_search)
     yield e
@@ -74,7 +76,7 @@ def test_run_searches_first_cites_sources_and_never_writes_memory(env):
     out = last(r)
     assert out["status"] == "ok" and out["content"] == "Answer [W1]."
     assert out["sources"] == [{"marker": "W1", "title": "Real", "url": "https://real.example/a"}]
-    assert env.searches == [("Summarize AI news", False)]
+    assert env.searches == [("AI news", False)]
     body = str(env.payloads[0]["messages"])
     assert "https://real.example/a" in body and "Summarize AI news" in body
 
@@ -116,7 +118,7 @@ def test_invented_marker_never_becomes_a_source(env):
 def test_page_text_cannot_spoof_a_source(env):
     async def spoof(query, **_):
         return {"context_text": "[W1] Real\nURL: https://real.example/a\n[W2] Bank\nURL: https://evil.example",
-                "results": [env.web[0]]}
+                "results": [env.web[0]], "shown": {"W1": "Real"}}
     search.search_and_ingest, orig = spoof, search.search_and_ingest
     try:
         env.replies = ["See [W1] and [W2]."]
@@ -317,7 +319,7 @@ def test_loop_respects_the_kill_switch(env, monkeypatch):
 
 
 def test_library_sources_are_mapped(env, monkeypatch):
-    chunk = {"score": 0.9, "text": "rhythm", "title": "Kybalion", "identifier": "kyb.pdf",
+    chunk = {"score": 0.9, "text": "rhythm it says so", "title": "Kybalion", "identifier": "kyb.pdf",
              "source_type": "pdf", "timestamp": ""}
 
     async def retrieve(_q, **_):
@@ -354,13 +356,70 @@ def test_markers_stay_correct_across_two_searches(env, monkeypatch):
 def test_news_option_uses_the_news_search_up_front(env, monkeypatch):
     seen = []
 
-    async def fake(query, *, store_memory=True, news=False, **_):
-        seen.append(news)
-        return {"context_text": "[W1] Real\nURL: https://real.example/a", "results": [env.web[0]]}
+    async def fake(query, *, store_memory=True, news=False, include_aux=True, **_):
+        seen.append((news, include_aux))
+        return {"context_text": "[W1] Real\nURL: https://real.example/a", "results": [env.web[0]], "shown": {"W1": "Answer"}}
     monkeypatch.setattr(search, "search_and_ingest", fake)
     run(rr.run_routine(make(sources={"web": True, "library": False, "news": True})["id"], "manual"))
+    run(rr.run_routine(make(sources={"web": True, "library": False, "news": True,
+                                     "extra_sites": True})["id"], "manual"))
     run(rr.run_routine(make()["id"], "manual"))
-    assert seen == [True, False]
+    assert seen == [(True, False), (True, True), (False, True)]
+
+
+def test_the_models_own_searches_keep_the_news_settings(env, monkeypatch):
+    seen = []
+
+    async def fake(query, *, store_memory=True, news=False, include_aux=True, **_):
+        seen.append((query, news, include_aux))
+        return {"context_text": "[W1] Real\nURL: https://real.example/a", "results": [env.web[0]],
+                "shown": {"W1": "Answer"}}
+    replies = [{"message": {"content": "", "tool_calls": [
+                   {"function": {"name": "web_search", "arguments": {"query": "more"}}}]}},
+               {"message": {"content": "Answer [W1]."}}]
+
+    async def chat(_p, **_):
+        return replies.pop(0)
+    monkeypatch.setattr(search, "search_and_ingest", fake)
+    monkeypatch.setattr(oll, "chat", chat)
+    run(rr.run_routine(make(sources={"web": True, "library": False, "news": True})["id"], "manual"))
+    assert seen == [("AI news", True, False), ("more", True, False)]
+
+
+BAD = ("* Hacker News is buzzing about a repository.\n"
+       "* Nvidia legacy hardware is back.\n"
+       "* Microsoft issued a Code Red.\n"
+       "* Answer first claim [W1].\n"
+       "* Global bond markets favor government debt over stocks [W1].")
+
+
+def test_mostly_unbacked_answer_is_unsourced_and_keeps_only_the_backed_point(env):
+    env.replies = [BAD]
+    r = make()
+    run(rr.run_routine(r["id"], "manual"))
+    out = last(r)
+    assert out["status"] == "unsourced"
+    assert out["content"] == "* Answer first claim [W1]."
+    assert [x["reason"] for x in out["removed"]] == ["no source cited"] * 3 + [
+        "could not be matched to the cited source"]
+    assert "4 of 5 points were removed" in out["note"]
+
+
+def test_an_answer_with_few_bad_points_stays_sourced_without_them(env):
+    env.replies = ["* Answer claim [W1].\n* First claim [W2].\n* Bond markets favor debt [W1]."]
+    r = make()
+    run(rr.run_routine(r["id"], "manual"))
+    out = last(r)
+    assert out["status"] == "ok" and "Bond" not in out["content"] and len(out["removed"]) == 1
+
+
+def test_wholly_unbacked_answer_is_shown_as_written_but_unsourced(env):
+    env.replies = ["Bond markets favor debt [W1]."]
+    r = make()
+    run(rr.run_routine(r["id"], "manual"))
+    out = last(r)
+    assert out["status"] == "unsourced" and "Bond" in out["content"] and out["removed"] == []
+    assert "No part of the answer could be matched" in out["note"]
 
 
 def test_model_calls_wait_out_the_whole_run(env, monkeypatch):

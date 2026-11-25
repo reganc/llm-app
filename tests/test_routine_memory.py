@@ -22,6 +22,7 @@ class Env:
     def __init__(self):
         self.payloads, self.replies, self.kw, self.sent = [], [], [], []
         self.web = ["a", "b"]
+        self.page = "News Nvidia fell story. Nothing new here but prices rose. Gold is $4,000"
 
 
 @pytest.fixture
@@ -43,7 +44,8 @@ def env(monkeypatch, tmp_path):
         if not left:
             return {"error": "No new results", "context_text": "", "results": [], "all_seen": bool(e.web)}
         return {"context_text": "\n\n".join(f"[W{i}] T{u}\nURL: https://n.example/{u}" for i, u in enumerate(left, 1)),
-                "results": [{"title": f"T{u}", "url": f"https://n.example/{u}", "engine": "bing news"} for u in left]}
+                "results": [{"title": f"T{u}", "url": f"https://n.example/{u}", "engine": "bing news"} for u in left],
+                "shown": {f"W{i}": f"T{u} {e.page}" for i, u in enumerate(left, 1)}}
 
     async def send(text):
         e.sent.append(text)
@@ -126,6 +128,7 @@ def test_model_can_say_nothing_new(env, reply):
 def test_the_word_inside_a_real_answer_is_not_nothing_new(env):
     rid = make()
     go(rid)
+    env.page = "OpenAI shipped a new model"
     env.replies = ["NOTHING_NEW on Nvidia, but OpenAI shipped a model [W1]."]
     assert go(rid)["status"] == "ok"
 

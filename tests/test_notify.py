@@ -161,15 +161,14 @@ def test_full_includes_the_answer_and_sources():
     assert "second" in text and "https://n.example/a" in text and "**" not in text
 
 
-def test_unsourced_and_error_are_labelled():
-    assert "unsourced" in notify.message(R, {**RUN, "status": "unsourced", "sources": []}).lower()
+def test_error_is_labelled():
     err = notify.message(R, {"status": "error", "error": "ReadTimeout: secret detail"})
     assert "failed" in err.lower() and "secret detail" not in err
 
 
 @pytest.mark.parametrize("mode,trigger,status,prev,want", [
     ("headline", "schedule", "ok", "ok", True),
-    ("full", "schedule", "unsourced", "ok", True),
+    ("full", "schedule", "unsourced", "ok", False),
     ("off", "schedule", "ok", "ok", False),
     ("headline", "manual", "ok", "ok", False),
     ("headline", "schedule", "unchanged", "ok", False),

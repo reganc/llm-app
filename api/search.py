@@ -330,29 +330,75 @@ def same_headline(a: str, b: str) -> bool:
     return shorter >= 4 and len(wa & wb) / shorter >= 0.7
 
 
-# Fewer dated stories than this in the last day and the search widens.
-_MIN_NEWS = 3
+# Fewer on-topic stories than this in the last day and the search widens.
+_MIN_NEWS = 5
+# Off-topic stories are only left out when at least this many on-topic ones remain.
+_MIN_ON_TOPIC = 3
 _NEWS_RESULTS = 8
 _MAX_EXTRA_RESULTS = 20
 
 
 async def searxng_news(query: str, num: int) -> list[dict]:
-    """Dated news stories: last day, then last week, then an ordinary search.
+    """Dated news stories: last day, topped up from the last week, then from an
+    ordinary search if there are hardly any.
 
     The ordinary engines answer "AI news today" with section pages (Reuters'
     AI index), which name no actual story."""
-    best: list[dict] = []
+    found: list[dict] = []
     try:
         async with httpx.AsyncClient(timeout=10.0, headers=_SEARXNG_HEADERS) as client:
             for time_range in ("day", "week"):
                 out = await _searxng_query(client, query, CFG.searxng_news_engines,
                                            num, time_range)
-                best = max(best, out, key=len)
-                if len(best) >= _MIN_NEWS:
-                    return best
+                found = _on_topic(_merge(found, out), query)
+                if len(found) >= _MIN_NEWS:
+                    return found[:num]
     except Exception as e:
         log.warning("searxng news search failed: %s", e)
-    return best or await searxng_search(query, num)
+    # One or two stories are often off-topic leftovers, so they don't stand alone.
+    if len(found) < _MIN_ON_TOPIC:
+        found = _on_topic(_merge(found, await searxng_search(query, num)), query)
+    return found[:num]
+
+
+def _merge(first: list[dict], more: list[dict]) -> list[dict]:
+    """`first`, then what `more` adds that isn't the same page or story."""
+    out = list(first)
+    for r in more:
+        if not any(norm_url(r["url"]) == norm_url(o["url"])
+                   or same_headline(r.get("title", ""), o.get("title", "")) for o in out):
+            out.append(r)
+    return out
+
+
+_TOPIC_STOP = _STOPWORDS | {"news", "headline", "headlines", "story", "stories", "update",
+                            "updates", "recent", "new", "top", "breaking", "about"}
+_TOPIC_ALIASES = {"ai": ("artificial intelligence",), "us": ("u.s.", "united states"),
+                  "uk": ("u.k.", "britain")}
+
+
+def _foreign_script(title: str) -> bool:
+    letters = [c for c in title if c.isalpha()]
+    return sum(c > "\u024f" for c in letters) * 2 > len(letters)
+
+
+def _on_topic(results: list[dict], query: str) -> list[dict]:
+    """Leave out stories that mention no word of the query or are in another script,
+    when enough others are left. ("Technology news" stories rarely say "technology":
+    keep them all.)"""
+    if query.isascii():  # a page the reader can't read, and no point can be matched to
+        readable = [r for r in results if not _foreign_script(r.get("title", ""))]
+        results = readable if len(readable) >= _MIN_ON_TOPIC else results
+    terms = [w for w in re.findall(r"\w+", query.lower()) if w not in _TOPIC_STOP]
+    terms += [a for w in terms for a in _TOPIC_ALIASES.get(w, ())]
+    if not terms:
+        return results
+    # Short words must match whole ("ai" is not "aid"); longer ones may be inflected.
+    pattern = re.compile("|".join(rf"(?<!\w){re.escape(w)}" + ("" if len(w) > 3 else r"(?!\w)")
+                                  for w in terms), re.IGNORECASE)
+    matching = [r for r in results
+                if pattern.search(f"{r.get('title', '')} {r.get('snippet', '')}")]
+    return matching if len(matching) >= _MIN_ON_TOPIC else results
 
 
 async def _ddg(query: str, num: int) -> list[dict]:
@@ -407,11 +453,13 @@ async def fetch_aux_sites() -> list[dict]:
 async def search_and_ingest(query: str, *, num_results: int | None = None,
                             store_memory: bool = True,
                             include_x: bool = True,
+                            include_aux: bool = True,
                             news: bool = False,
                             exclude_urls: frozenset[str] = frozenset(),
                             exclude_titles: tuple[str, ...] = ()) -> dict:
     """`exclude_urls` (norm_url form) and `exclude_titles` drop stories the caller
-    has already seen; `all_seen` in the reply means nothing else was found."""
+    has already seen; `all_seen` in the reply means nothing else was found.
+    `shown` in the reply maps each marker to the text the model is given for it."""
     if not CFG.search_enabled:
         return {"query": query, "results": [], "context_text": "",
                 "stored": 0, "error": "Search disabled"}
@@ -425,7 +473,7 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
     ask = num + min(len(exclude_urls), _MAX_EXTRA_RESULTS)
     raw, aux, x_items = await asyncio.gather(
         searxng_news(query, ask) if news else searxng_search(query, ask),
-        fetch_aux_sites(),
+        fetch_aux_sites() if include_aux else _empty(),
         search_x(query) if (include_x and CFG.x_search_enabled) else _empty(),
     )
 
@@ -486,23 +534,27 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
     # text is high-density. Bumped from the prior head-truncation defaults
     # (1500/400/300 × 6/6/3) which dropped mid-page price/datum tables off
     # the cliff.
+    shown: dict[str, str] = {}
     lines = [f"── LIVE SEARCH RESULTS for: {query} (retrieved {retrieved_at}) ──"]
     if query_items:
         lines.append("[ WEB SEARCH RESULTS ]")
         for i, r in enumerate(query_items[:9], 1):
             preview = _focused_excerpt(r.get("text", ""), query, 2800)
             lines.append(f"[W{i}] {r['title']}\nURL: {r['url']}\n{preview}")
+            shown[f"W{i}"] = f"{r['title']}\n{preview}"
     if x_items:
         lines.append("[ X / TWITTER — LATEST POSTS ]")
         for i, r in enumerate(x_items[:10], 1):
             preview = _focused_excerpt(r.get("text", r.get("snippet", "")) or "",
                                        query, 500)
             lines.append(f"[X{i}] {r['title']}\nURL: {r['url']}\n{preview}")
+            shown[f"X{i}"] = f"{r['title']}\n{preview}"
     if aux_only:
         lines.append("[ AUXILIARY SITES ]")
         for i, r in enumerate(aux_only[:3], 1):
             preview = _focused_excerpt(r.get("text", ""), query, 700)
             lines.append(f"[A{i}] {r['title']}\nURL: {r['url']}\n{preview}")
+            shown[f"A{i}"] = f"{r['title']}\n{preview}"
     lines.append("── END SEARCH RESULTS ──")
     context_text = "\n\n".join(lines)
 
@@ -520,6 +572,7 @@ async def search_and_ingest(query: str, *, num_results: int | None = None,
                      "engine": r.get("engine", "web")}
                     for r in all_results],
         "context_text": context_text,
+        "shown": shown,
         "stored": stored,
         "source": "+".join(sources) if sources else "unknown",
         "retrieved_at": retrieved_at,

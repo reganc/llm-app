@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 
 import routine_draft
+import routine_query
 import routine_runner as runner
 import routine_store as store
 from auth import verify_api_key
@@ -30,6 +31,7 @@ class Sources(BaseModel):
     web: bool = True
     library: bool = False
     news: bool = False  # search recent news stories instead of the general web
+    extra_sites: bool = False  # with news: also read the always-included sites
 
     model_config = {"extra": "forbid"}
 
@@ -43,7 +45,7 @@ def _check_timezone(value: str | None) -> str | None:
 class RoutineCreate(BaseModel):
     name: Name
     prompt: Prompt
-    query: SearchQuery | None = None  # what to search for; defaults to the prompt
+    query: SearchQuery | None = None  # what to search for; worked out from the prompt if empty
     schedule: Schedule
     timezone: str = Field(default_factory=lambda: CFG.routine_timezone)
     sources: Sources = Field(default_factory=Sources)
@@ -84,6 +86,7 @@ def _summary(routine: dict) -> dict:
     memory = routine.get("memory") or {}
     return {"only_new": False, "notify": "off",
             **{k: v for k, v in routine.items() if k not in ("runs", "memory")},
+            "search_phrase": routine_query.effective(routine),
             "remembers": len(memory.get("urls") or []),
             "last_run": {k: latest[k] for k in keys} if latest else None}
 
@@ -154,7 +157,9 @@ async def update_routine(routine_id: str, req: RoutineUpdate):
         fields["query"] = fields["query"] or None
     if fields.keys() & {"schedule", "timezone", "enabled"}:
         fields["next_run_at"] = _upcoming({**current, **fields})
-    if any(f in fields and fields[f] != current.get(f) for f in runner.TASK_FIELDS):
+    # Filled in first: a routine saved before a source option existed is not a new task.
+    before = {**current, "sources": Sources(**current["sources"]).model_dump()}
+    if any(f in fields and fields[f] != before.get(f) for f in runner.TASK_FIELDS):
         fields["memory"] = None
     updated = store.update(routine_id, fields)
     if updated is None:

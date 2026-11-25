@@ -2,8 +2,8 @@
 
 A run is the ordinary agent loop (read-only web/library tools) with a web
 search always done up front, and `store=False` so unattended runs never write
-to memory. Whether a result counts as sourced is decided here by matching its
-citation markers to the results actually returned, not by the model.
+to memory. Whether a result counts as sourced is decided in code, point by point
+(see routine_check), not by the model.
 """
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from zoneinfo import ZoneInfo
 import agent
 import notify
 import ollama as oll
+import routine_check
+import routine_query
 import routine_store as store
 import search
 import x_search
@@ -31,7 +33,6 @@ RUN_TIMEOUT_S = 900.0
 # downtime never fires a burst of stale runs.
 GRACE = timedelta(hours=1)
 _MAX_TOKENS = 3072
-_PREFETCH_QUERY_CHARS = 300
 # What a routine remembers of its own sourced results (for `only_new`).
 _MEMORY_URLS = 300
 _MEMORY_TITLES = 100
@@ -141,20 +142,27 @@ def _cited(content: str, trace: agent.Trace) -> list[dict]:
 
 
 def _outcome(content: str, trace: agent.Trace, *, web: bool, tools: bool) -> dict:
-    sources = _cited(content, trace)
-    status, notes = "ok", []
+    status, notes, removed = "ok", [], []
     if web and not trace.web_results:
         status = "unsourced"
         notes.append("Web search returned no results, so this answer is not backed by "
                      "current sources.")
-    elif tools and not sources:
-        status = "unsourced"
-        notes.append("The answer cites no sources.")
+    elif tools:
+        checked = routine_check.check(content, trace.texts)
+        if not checked.enough:
+            status = "unsourced"
+        if not checked.kept:  # shown as written, under the unsourced label
+            notes.append("No part of the answer could be matched to a source it cites.")
+        elif checked.removed:
+            content, removed = checked.content, checked.removed
+            notes.append(f"{len(removed)} of {checked.total} points were removed because "
+                         "they could not be matched to a source.")
+    sources = _cited(content, trace)
     x = x_search.status()  # X posts are part of every web search when it works
     if web and x["enabled"] and not x["ready"]:
         notes.append("X posts were not included: "
                      f"{x['last_error'] or 'X search is not set up.'}")
-    return {"status": status, "content": content, "sources": sources,
+    return {"status": status, "content": content, "sources": sources, "removed": removed,
             "tool_calls": trace.calls, "note": " ".join(notes) or None}
 
 
@@ -172,12 +180,13 @@ async def _execute(routine: dict) -> dict:
     # News stories keep one URL each, so a reported one can be left out for good.
     # Other pages (a price, a status) change in place and must be read again.
     trace = agent.Trace(exclude_urls=frozenset(memory["urls"]) if news else frozenset(),
-                        exclude_titles=tuple(memory["titles"]) if news else ())
+                        exclude_titles=tuple(memory["titles"]) if news else (),
+                        news=news,
+                        include_aux=not news or bool(routine["sources"].get("extra_sites")))
     block = None
     if web:
-        query = routine.get("query") or routine["prompt"][:_PREFETCH_QUERY_CHARS]
-        block = await agent.prefetch_web(query, trace, store=False,
-                                         news=news)
+        query = routine.get("query") or routine_query.search_phrase(routine["prompt"])
+        block = await agent.prefetch_web(query, trace, store=False)
         if block is None and trace.all_seen and not library:
             return _unchanged("Every story found was already reported.", trace)
     messages = _messages(routine, block, tools, memory)
