@@ -48,7 +48,9 @@ services:
     restart: unless-stopped
     labels:
       autoheal: "true"
-    ports: ["8025:8080"]
+    # Loopback, plus the Docker gateway for apps that use host.docker.internal:8025 (nexus).
+    # No login: never publish it to the network.
+    ports: ["127.0.0.1:8025:8080", "172.17.0.1:8025:8080"]
     volumes:
       - searxng_data:/etc/searxng
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
