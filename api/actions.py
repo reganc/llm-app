@@ -469,6 +469,40 @@ async def execute(action_id: str, hooks: dict | None = None) -> dict:
     return done
 
 
+def reject(action_id: str, *, by: str) -> dict:
+    """Reject an open proposal without its nonce (rejecting only ever stops an action).
+    Approval has no such path: it is a tap on the Telegram card only."""
+    record = _records.get(action_id)
+    if record is None:
+        raise Refused("That proposal no longer exists.")
+    sweep()
+    if _records[action_id]["status"] not in OPEN:
+        raise Refused(f"Already {_records[action_id]['status']}.")
+    rejected = _update(action_id, status="rejected", nonce="")
+    _event("rejected", rejected, by=by)
+    return rejected
+
+
+def recent(limit: int = 30) -> list[dict]:
+    """Newest first: what the web panel shows."""
+    rows = sorted(_records.values(), key=lambda r: r["created_at"], reverse=True)[:limit]
+    return [copy.deepcopy(r) for r in rows]
+
+
+def view(record: dict) -> dict:
+    """A proposal for display: code's description of what runs, kept apart from the model's words."""
+    try:
+        title, details = ACTIONS[record["action"]].describe(record["args"])
+    except (Refused, KeyError) as e:
+        title, details = record["action"], [str(e)]
+    iso = lambda ts: datetime.fromtimestamp(ts, ZoneInfo(CFG.routine_timezone)).isoformat(timespec="seconds")
+    return {"id": record["id"], "action": record["action"], "status": record["status"],
+            "risk": record["risk"], "title": title, "details": details, "reason": record["reason"],
+            "source": record["source"], "client": record.get("client", ""),
+            "after_reading": record["after_reading"], "result": record.get("result"),
+            "created_at": iso(record["created_at"]), "expires_at": iso(record["expires_at"])}
+
+
 def sweep() -> list[dict]:
     """Expire open proposals past their time; returns them (their cards need editing)."""
     now, expired = _now(), []

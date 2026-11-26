@@ -65,6 +65,7 @@ llm-app/
 │   ├── action_cards.py         # approval cards and button taps in Telegram
 │   ├── action_log.py           # hash-chained log of every proposal and outcome
 │   ├── mcp_server.py           # POST /mcp: fleet status + propose actions for MCP clients
+│   ├── actions_api.py          # /v1/actions: list and reject proposals (never approve)
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -77,6 +78,7 @@ llm-app/
 │       ├── index.html
 │       ├── app.js
 │       ├── apps.js             # Apps panel: every fleet.yaml app with its health (GET /v1/hub)
+│       ├── actions.js          # Actions panel: proposals and results; reject only
 │       ├── styles.css
 │       └── favicon.svg
 └── searxng/
@@ -174,6 +176,7 @@ Coverage:
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
 | `test_actions.py` · `test_action_cards.py` | the gate: targets, limits, expiry, one use per approval, second tap for high risk, re-check before running, log chain; the model only gets a card sent, only the user's tap on that card runs it |
+| `test_actions_api.py` · `test_actions_view.py` | the web panel: list newest first, reject (logged, card updated), no approve route, expiry on listing; words per status (needs node) |
 | `test_mcp.py` | the MCP endpoint: key and origin, handshake, exactly four tools, proposals only send a card (refused while chat is off), status |
 | `test_executor.py` | the executor: token, only listed home apps, label match, order, cooldown and daily cap from its log, health, log chain (fake Docker) |
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
@@ -324,7 +327,13 @@ localhost): `fleet_status` (the hub), `list_actions`, `propose_action`, `action_
 tool runs or approves anything: a proposal from an MCP client is a card on the user's phone
 like any other, naming the client ("what it read before is unknown"), and is refused while
 chat from Telegram is off, since that is where the tap arrives. Connect Claude Code with
-`claude mcp add --transport http fleet http://localhost:8030/mcp --header "Authorization: Bearer …"`. Never: private
+`claude mcp add --transport http fleet http://localhost:8030/mcp --header "Authorization: Bearer …"`.
+**Actions panel** (`static/actions.js`, `api/actions_api.py`): the SPA lists proposals (code's
+description apart from the model's words, source, expiry, result) and can **reject**, which
+also updates the Telegram card. There is no approve endpoint, on purpose: MCP clients hold the
+same API key, so a web approval would let a client approve its own proposal. Limit: the gate
+stops model-proposed and remote actions, not a local process with Docker or root access, which
+could edit `DATA_DIR/actions` directly. Never: private
 apps, deleting, settings, secrets, messages, money. Routines and the briefing never get the
 tool. Every step goes to `DATA_DIR/actions/audit.jsonl` (hash-chained, no message text).
 Typed `/run`, `/pause`, `/resume` still act directly: the user wrote them.
@@ -398,6 +407,7 @@ flag False and are unchanged.
 - `GET/PATCH /v1/briefing` · `POST /v1/briefing/preview` · `POST /v1/briefing/send` — morning briefing
 - `GET/POST /v1/skills` · `PUT/DELETE /v1/skills/{name}` — saved skills
 - `GET /v1/hub` — status cards from the other apps
+- `GET /v1/actions` · `POST /v1/actions/{id}/reject` — proposed actions (no approve endpoint)
 - `POST /mcp` — MCP (streamable HTTP, JSON replies): `fleet_status`, `list_actions`, `propose_action`, `action_status`
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`

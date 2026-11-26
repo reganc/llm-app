@@ -1,8 +1,9 @@
 # Action gate: the bot proposes, you approve, code acts
 
-Status: steps 1–4 built (2026-11-26): the gate, its log, Telegram cards, the three
-llm-app actions, `rerun_summary` (with Mentat's `?replace=true`), `restart_app`
-through the executor, and the MCP endpoint. Step 5 (SPA panel) not started.
+Status: all five steps built (2026-11-26): the gate, its log, Telegram cards, the
+three llm-app actions, `rerun_summary` (with Mentat's `?replace=true`), `restart_app`
+through the executor, the MCP endpoint, and the SPA's Actions panel (reject only, see
+below).
 
 Decided: restarts for mentat, nexus, delphi and trading (not llm-app or Ollama);
 high risk keeps the second tap; MCP proposals allowed when step 4 lands.
@@ -168,7 +169,18 @@ A day's or week's report that exists is kept with no model call and
 3. **Executor + `restart_app`** with fleet.yaml `restart:`; tests with a fake
    Docker client; then one real restart of mentat, approved by you.
 4. **MCP endpoint**, tried from Claude Code.
-5. SPA "Pending actions" panel (Telegram covers approval until then).
+5. SPA "Actions" panel: list and **reject** only. Planned with approval too, but
+   step 4 gave MCP clients the same API key the SPA uses, so a web Approve
+   button would let a client approve its own proposal. Approving stays a tap on
+   the Telegram card. Web approval would need a separate passphrase stored
+   nowhere readable.
+
+## What the gate does not stop
+
+It stops actions a model proposes (in chat, from an MCP client, or steered by a
+web page) and callers from elsewhere. It does not stop a local process with
+Docker or root access: that can edit `DATA_DIR/actions` or use the Docker
+socket directly. Treat anything with that access as already able to act.
 
 Each step is its own PR with the boundary text added to the app's CLAUDE.md.
 

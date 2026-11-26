@@ -891,6 +891,16 @@ button.badge.clickable:active { transform: translateY(1px); }
 .app-item.alert::before { content: "●"; color: var(--red); font-size: 9px; }
 .app-note { margin-top: 6px; padding-left: 16px; }
 
+/* ── Actions ── */
+#actionsModal .modal-head { gap: 12px; justify-content: flex-start; }
+.action-risk { padding: 1px 7px; border-radius: 999px; font-size: 11px; color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border)); white-space: nowrap; }
+.action-result { margin: 8px 0 0 16px; font-size: 13px; overflow-wrap: anywhere; white-space: pre-line; }
+#actionsModal .app-title { white-space: normal; overflow-wrap: anywhere; } /* what will run: never cut */
+#actionsModal .app-head { flex-wrap: wrap; row-gap: 2px; }
+.action-foot { display: flex; align-items: center; gap: 10px; justify-content: space-between;
+  margin-top: 10px; padding-left: 16px; }
+
 /* ── Images ── */
 .image-tray { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 0; }
 .image-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
