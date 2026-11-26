@@ -61,3 +61,41 @@ Streaming mode can't observe `finish_reason` or token usage, so
   born?").
 
 Time-sensitive cases check routing and citations only, never the answer text.
+
+## Replaying real questions (`replay.py`)
+
+Before swapping the model, ask the new one the questions you actually asked,
+not just the 29 written cases. `replay.py` takes the newest saved SPA
+conversations and remembered Telegram turns, each with the history it had, and
+sends every one to the active model and to a candidate through the gateway
+(`store: false`).
+
+```bash
+docker exec ollama ollama pull <tag>                       # the candidate, first
+python evals/replay.py --candidate <tag>                   # newest 40 questions
+python evals/replay.py --candidate <tag> --limit 10 --label quick
+```
+
+Code records only what it can check (`replay_diff.py`). **Flaws** are problems
+in one answer: `error`, `empty`, `truncated`, `bad_citations` (a marker it was
+never shown), `uncited_web` (web results shown, nothing cited), `repaired` (the
+gateway had to fix its citations). A flaw only the candidate has is a
+regression; one only the baseline has is a fix. **Differences** are neutral
+pointers to answers worth reading: `search_differs`, `numbers_differ` (the
+figures given aren't the same), `length_differs` (over 2.5×), `slower`/`faster`
+(2× and at least 5 s). Which answer is better is for a person to read: the
+report lists regressions first, then fixes, then the most differences.
+
+- Questions alternate which model goes first, and each model is loaded before
+  its timed call, so latency is answering, not loading. Web results can still
+  differ between the two calls.
+- Both models don't fit in 12 GB together, so every question swaps them and
+  other apps wait: run it when the fleet is quiet. The active model is loaded
+  again at the end.
+- Telegram turns go through the gateway, not the bot's own code path (no style
+  prompt or `propose_action`), with memory off and 1024 tokens, as in the bot.
+- The questions and answers are private: written only to `evals/results/`
+  (gitignored, mode 0600) as `.json` and a readable `.md`, never printed.
+- Calibrated 2026-11-26 with the active model against itself (`--candidate
+  default:latest`): at temperature 0 the answers were identical, with no
+  differences flagged; latency for the same answer varied up to 2×.
