@@ -95,6 +95,18 @@ def test_conversation_questions_carry_their_history():
     assert all(m["role"] != "system" for q in qs for m in q["messages"])
 
 
+def test_a_loaded_document_is_history_not_a_question():
+    conv = {"id": "doc", "messages": [
+        {"role": "user", "content": "Please load this document:\n\nFILE: a.pdf\n...text..."},
+        {"role": "assistant", "content": "Document loaded: a.pdf (9,000 chars). Ready for questions."},
+        {"role": "user", "content": "what is chapter two about?"}]}
+    (q,) = replay.from_conversation(conv)
+    assert q["id"] == "spa-doc-2" and len(q["messages"]) == 3
+    assert q["messages"][0]["content"].startswith("Please load this document:")   # still sent as history
+    article = {"id": "art", "messages": [{"role": "user", "content": "Please load this article:\n\nSOURCE: x"}]}
+    assert replay.from_conversation(article) == []
+
+
 def test_conversation_history_is_capped():
     msgs = [{"role": r, "content": f"message number {i}"}
             for i, r in zip(range(30), ["user", "assistant"] * 15)]
