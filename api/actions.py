@@ -8,7 +8,8 @@ does. An approval covers one stored action: its arguments' hash, used once,
 and everything is checked again just before it runs.
 
 On the list (adding one means code and a test, never config): run a routine
-now, check a watched page now, pause or resume a routine. Never on it: anything
+now, check a watched page now, pause or resume a routine, re-run mentat's
+daily or weekly summary. Never on it: anything
 for a private app, deleting, settings, secrets, messages to anyone, money.
 
 Proposals live in DATA_DIR/actions/pending.json (atomic writes, kept 7 days so
@@ -29,7 +30,11 @@ from pathlib import Path
 from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
 
+import httpx
+
 import action_log
+import ask_apps
+import hub
 import routine_runner as runner
 import routine_store
 import watch_runner
@@ -154,10 +159,77 @@ async def _run_set(a: dict, hooks: dict) -> str:
     return f"{routine['name']} {'resumed' if a['enabled'] else 'paused'}."
 
 
+_KINDS = ("daily", "weekly")
+SUMMARY_TIMEOUT_S = 600.0   # today's digests: one local model call per app
+
+
+def _mentat() -> hub.App:
+    found = next((a for a in hub.load_fleet() if a.id == "mentat"), None)
+    if found is None or found.privacy != "home" or not hub._safe_url(found.summary.get("base")):
+        raise Refused("Mentat isn't in the app list with an address that may be used.")
+    return found
+
+
+def _resolve_rerun(args: dict) -> dict:
+    kind = str(args.get("target") or "").strip().lower()
+    if kind not in _KINDS:
+        raise Refused("target must be daily or weekly.")
+    _mentat()
+    return {"kind": kind}
+
+
+def _describe_rerun(a: dict) -> tuple[str, list[str]]:
+    if a["kind"] == "weekly":
+        return ("Re-run Mentat's weekly synthesis",
+                ["Replaces this week's report with a new one (local model, about half a minute)."])
+    return ("Re-run Mentat's daily digests",
+            ["Replaces today's digest for every app (local model, a few minutes)."])
+
+
+def _summary_result(kind: str, body: dict) -> str:
+    """One sentence from Mentat's reply; a headline only if it passes the privacy rule."""
+    if body.get("status") == "no-data":
+        return "There was nothing to summarize, so no report was written."
+    if kind == "daily":
+        saved = body.get("saved") if isinstance(body.get("saved"), dict) else {}
+        failed = sorted(o for o, v in (body.get("origins") or {}).items()
+                        if str(v).startswith("error"))
+        text = f"Daily digests {', '.join(f'{o} {v}' for o, v in sorted(saved.items())) or 'unchanged'}."
+        return text + (f" Failed: {', '.join(failed)}." if failed else "")
+    check = body.get("check") if isinstance(body.get("check"), dict) else {}
+    text = f"Weekly synthesis {body.get('saved', 'unchanged')}"
+    if check.get("points"):
+        text += f": {check.get('kept', 0)} of {check['points']} points held up"
+    text += "." if body.get("status") != "unsourced" else " (too few to count as sourced)."
+    headline = str(body.get("headline") or "")[:200]
+    if headline and hub.allowed(headline, "home"):
+        text += f"\n{headline}"
+    return text
+
+
+async def _run_rerun(a: dict, hooks: dict) -> str:
+    app = _mentat()
+    url = f"{app.summary['base']}/summaries/{a['kind']}?replace=true"
+    async with httpx.AsyncClient(timeout=httpx.Timeout(SUMMARY_TIMEOUT_S, connect=5.0),
+                                 follow_redirects=False) as client:
+        try:
+            body = await ask_apps._post_json(client, url, {})
+        except ask_apps.AskError as e:
+            raise Refused(f"Mentat: {e}") from None
+        except httpx.TimeoutException:
+            raise Refused("Mentat took too long.") from None
+        except (httpx.HTTPError, ValueError):
+            raise Refused("Mentat couldn't be reached.") from None
+    if not isinstance(body, dict):
+        raise Refused("Mentat's reply couldn't be read.")
+    return _summary_result(a["kind"], body)
+
+
 ACTIONS: dict[str, Action] = {a.name: a for a in (
     Action("run_routine", "low", _resolve_run, _describe_run, _run_run),
     Action("check_watch", "low", _resolve_check, _describe_check, _run_check),
     Action("set_routine", "low", _resolve_set, _describe_set, _run_set),
+    Action("rerun_summary", "low", _resolve_rerun, _describe_rerun, _run_rerun),
 )}
 
 
@@ -385,11 +457,13 @@ def tool() -> dict:
             "Ask the user to approve one action. This changes nothing: the user gets a card "
             "and the action happens only if they tap Approve. Use it only when the user asks "
             "for one of these: run_routine (run a routine now), check_watch (check a watched "
-            "page now), set_routine (pause or resume a routine, with state). "
+            "page now), set_routine (pause or resume a routine, with state), rerun_summary "
+            "(re-run Mentat's summary: target daily or weekly). "
             f"Their routines: {routines}. Their watched pages: {watches}."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": list(ACTIONS)},
-            "target": {"type": "string", "description": "The routine or watched page's name."},
+            "target": {"type": "string", "description": (
+                "The routine or watched page's name; for rerun_summary, daily or weekly.")},
             "state": {"type": "string", "enum": ["paused", "active"],
                       "description": "For set_routine only."},
             "reason": {"type": "string", "description": "One sentence: why, in the user's terms."},
