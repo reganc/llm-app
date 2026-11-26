@@ -207,3 +207,51 @@ def test_homelab_high_findings_are_a_warning(monkeypatch):
     assert asyncio.run(hub_adapters.homelab(None, "", NOW)) == [{"title": "8 high, 3 medium", "severity": "warn"}]
     monkeypatch.setattr(briefing, "homelab_section", lambda now: "Homelab: 2 low.")
     assert asyncio.run(hub_adapters.homelab(None, "", NOW))[0]["severity"] == "info"
+
+
+def _helm_app(id_, status="operational", **kw):
+    return {"id": id_, "display_name": id_.title(), "operational_status": status, "frozen": False,
+            "diverged": False, "severity_breakdown": {}, **kw}
+
+
+def test_helm_adapter():
+    calm = asyncio.run(hub_adapters.helm(_getter({"/fleet": {"apps": [
+        _helm_app("loop", severity_breakdown={"high": 348, "medium": 9}),
+        _helm_app("carecore", severity_breakdown={"high": 9}),
+        _helm_app("vps", "unknown"),
+    ]}}), "http://b", NOW))
+    assert calm == [{"title": "2 remote apps operational; 1 not monitored", "severity": "info"},
+                    {"title": "357 high-severity findings open across the remote apps", "severity": "info"}]
+    bad = asyncio.run(hub_adapters.helm(_getter({"/fleet": {"apps": [
+        _helm_app("loop", "major_outage", diverged=True),
+        _helm_app("carecore", "degraded", frozen=True, severity_breakdown={"critical": 2}),
+    ]}}), "http://b", NOW))
+    assert [(i["title"], i["severity"]) for i in bad] == [
+        ("Outage: Loop", "alert"),
+        ("Degraded: Carecore", "warn"),
+        ("Running a different version than recorded: Loop", "warn"),
+        ("Deploys frozen: Carecore", "info"),
+        ("2 critical findings open: Carecore", "warn"),
+    ]
+
+
+def _mentat(daily, weekly, collisions=0):
+    return _getter({
+        "/summaries?limit=5": {"daily": [{"id": d, "body_md": "model text $5"} for d in daily],
+                               "weekly": [{"id": w} for w in weekly], "headline": "free text"},
+        "/steward/collisions": {"collisions": [{}] * collisions},
+    })
+
+
+def test_mentat_adapter():
+    fresh = asyncio.run(hub_adapters.mentat(_mentat(
+        ["daily-nexus-20261126", "daily-chronos-20261126", "daily-delphi-20261125"], ["weekly-2026-W48"], 7),
+        "http://b", NOW))
+    assert fresh == [{"title": "Daily digests for 2026-11-26: chronos, nexus", "severity": "info"},
+                     {"title": "Steward: 7 port or subnet clashes between repos", "severity": "info"}]
+    stale = asyncio.run(hub_adapters.mentat(_mentat(["daily-nexus-20261120"], ["weekly-2026-W35"]), "http://b", NOW))
+    assert [(i["title"], i["severity"]) for i in stale] == [
+        ("No daily digest since 2026-11-20", "warn"),
+        ("Weekly synthesis hasn't run since week 35 of 2026", "warn"),
+    ]
+    assert asyncio.run(hub_adapters.mentat(_mentat([], []), "http://b", NOW))[0]["severity"] == "warn"
