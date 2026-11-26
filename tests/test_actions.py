@@ -279,6 +279,76 @@ def test_tool_lists_the_users_routines_and_pages(clock):
     watch_store.create({"name": "GPU price", "url": "https://shop.example/gpu", "enabled": True})
     fn = actions.tool()["function"]
     assert fn["name"] == "propose_action"
-    assert fn["parameters"]["properties"]["action"]["enum"] == ["run_routine", "check_watch", "set_routine"]
+    assert fn["parameters"]["properties"]["action"]["enum"] == ["run_routine", "check_watch", "set_routine", "rerun_summary"]
     assert "“News”, “Weekly review” (paused)" in fn["description"]
     assert "“GPU price”" in fn["description"]
+
+
+# ── rerun_summary (Mentat) ───────────────────────────────────────────────────
+
+import httpx  # noqa: E402
+
+import ask_apps  # noqa: E402
+import hub  # noqa: E402
+
+MENTAT = hub.App(id="mentat", title="Mentat", privacy="home",
+                 summary={"adapter": "mentat", "base": "http://host.docker.internal:8400"}, ask="mentat")
+
+
+@pytest.fixture
+def mentat(clock, monkeypatch):
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [MENTAT])
+    posted = []
+
+    async def post(client, url, payload):
+        posted.append(url)
+        reply = mentat.reply
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+    monkeypatch.setattr(ask_apps, "_post_json", post)
+    mentat.posted = posted
+    mentat.reply = {}
+    return mentat
+
+
+def test_rerun_needs_daily_or_weekly_and_a_usable_mentat(mentat, monkeypatch):
+    p = propose("rerun_summary", "Weekly ")
+    assert p["args"] == {"kind": "weekly"}
+    assert actions.card_text(p).splitlines()[1] == "Re-run Mentat's weekly synthesis"
+    with pytest.raises(actions.Refused, match="daily or weekly"):
+        propose("rerun_summary", "monthly")
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [
+        hub.App(id="mentat", title="Mentat", privacy="home", summary={"base": "http://10.0.0.5:8400"})])
+    with pytest.raises(actions.Refused, match="address that may be used"):
+        propose("rerun_summary", "daily")
+
+
+def test_rerun_weekly_replaces_and_reports_the_check(mentat):
+    mentat.reply = {"status": "ok", "saved": "replaced", "headline": "Yields split as weather turns",
+                    "check": {"points": 9, "kept": 8}}
+    out = run(actions.execute(approved(action="rerun_summary", target="weekly")["id"]))
+    assert mentat.posted == ["http://host.docker.internal:8400/summaries/weekly?replace=true"]
+    assert out["status"] == "done"
+    assert out["result"] == "Weekly synthesis replaced: 8 of 9 points held up.\nYields split as weather turns"
+
+
+def test_rerun_results_withhold_money_and_say_what_failed(mentat):
+    body = {"status": "unsourced", "saved": "replaced", "headline": "Bitcoin to $90k",
+            "check": {"points": 6, "kept": 2}}
+    assert actions._summary_result("weekly", body) == (
+        "Weekly synthesis replaced: 2 of 6 points held up (too few to count as sourced).")
+    daily = {"status": "ok", "saved": {"nexus": "replaced", "chronos": "created"},
+             "origins": {"nexus": "daily-nexus-1", "chronos": "daily-chronos-1", "delphi": "error: X"}}
+    assert actions._summary_result("daily", daily) == (
+        "Daily digests chronos created, nexus replaced. Failed: delphi.")
+    assert actions._summary_result("weekly", {"status": "no-data"}).startswith("There was nothing")
+
+
+def test_rerun_failures_are_sentences(mentat):
+    mentat.reply = ask_apps.AskError("It answered with an error (500).")
+    out = run(actions.execute(approved(action="rerun_summary", target="daily")["id"]))
+    assert out["status"] == "failed" and out["result"] == "Mentat: It answered with an error (500)."
+    mentat.reply = httpx.ReadTimeout("slow")
+    out = run(actions.execute(approved(action="rerun_summary", target="weekly")["id"]))
+    assert out["result"] == "Mentat took too long."

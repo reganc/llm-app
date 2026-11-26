@@ -1,7 +1,8 @@
 # Action gate: the bot proposes, you approve, code acts
 
-Status: step 1 built (2026-11-26): the gate, its log and Telegram cards with the
-three llm-app actions. Steps 2–5 not started.
+Status: steps 1–2 built (2026-11-26): the gate, its log, Telegram cards, the three
+llm-app actions, and `rerun_summary` (with Mentat's `?replace=true`). Steps 3–5 not
+started.
 
 Decided: restarts for mentat, nexus, delphi and trading (not llm-app or Ollama);
 high risk keeps the second tap; MCP proposals allowed when step 4 lands.
@@ -147,12 +148,11 @@ your phone or in the SPA like any other proposal; the card says which client
 proposed it. The same registry backs the bot's own agent tool, so there is one
 list of actions and one gate.
 
-## mentat change first
+## mentat change (done)
 
-mentat never replaces a saved report (`ON CONFLICT DO NOTHING`), and the
-summary task says "ok" anyway. `rerun_summary` needs: explicit re-runs replace
-that day's/week's report (scheduled runs keep the current behaviour), and a
-result that says "replaced" or "created". Its own small PR.
+A day's or week's report that exists is kept with no model call and
+`saved: "kept"`; `?replace=true` replaces it with its claims, and results say
+"created", "replaced" or "kept". Scheduled runs never replace.
 
 ## Build order
 

@@ -9,6 +9,7 @@ can't be pressed again. Telegram's errors never include message text.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -20,6 +21,7 @@ log = logging.getLogger("llm-api.actions")
 
 _DATA = re.compile(r"act:([0-9a-f]{12}):(approve|reject|confirm):([0-9a-f]{0,8})")
 _ACK = {"run": "Approved.", "confirm": "Tap again to confirm.", "rejected": "Rejected."}
+_tasks: set[asyncio.Task] = set()   # approved actions running; polling never waits for them
 
 
 def _markup(record: dict) -> dict:
@@ -100,7 +102,17 @@ async def on_callback(callback: dict, hooks: dict | None = None) -> None:
     await _answer(callback, _ACK[step])
     await refresh(record)
     if step == "run":
+        task = asyncio.get_running_loop().create_task(_run(action_id, hooks))
+        _tasks.add(task)
+        task.add_done_callback(_tasks.discard)
+
+
+async def _run(action_id: str, hooks: dict | None) -> None:
+    """In the background: a summary re-run takes minutes, and taps keep working meanwhile."""
+    try:
         await refresh(await actions.execute(action_id, hooks))
+    except Exception as e:
+        log.warning("action %s: %s", action_id, type(e).__name__)
 
 
 async def sweep() -> None:

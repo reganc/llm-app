@@ -155,3 +155,20 @@ def test_polling_asks_for_button_taps_and_expires_old_cards(act, monkeypatch):
     assert poll["allowed_updates"] == ["message", "callback_query"]
     assert edits(act)[-1]["text"].startswith("Expired. Nothing was changed.")
     assert only_record()["status"] == "expired"
+
+
+def test_approved_rerun_runs_in_the_background_and_the_card_reports_it(act, monkeypatch):
+    import ask_apps
+    import hub
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [hub.App(
+        id="mentat", title="Mentat", privacy="home", summary={"base": "http://host.docker.internal:8400"})])
+
+    async def post(client, url, payload):
+        return {"status": "ok", "saved": "replaced", "headline": "Calm week", "check": {"points": 4, "kept": 4}}
+    monkeypatch.setattr(ask_apps, "_post_json", post)
+    act.replies = [propose_call(action="rerun_summary", target="weekly"), "Waiting for you."]
+    say(act, msg("redo mentat's weekly report"))
+    say(act, tap(only_record()))
+    texts = [e["text"].splitlines()[0] for e in edits(act)]
+    assert texts == ["Approved. Running…", "Done."]
+    assert "Weekly synthesis replaced: 4 of 4 points held up.\nCalm week" in edits(act)[-1]["text"]

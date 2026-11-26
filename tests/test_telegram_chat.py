@@ -8,6 +8,7 @@ import time
 
 import pytest
 
+import action_cards
 import agent
 import ollama as oll
 import routine_runner as rr
@@ -96,7 +97,7 @@ def say(env, *updates):
         await tc.handle(list(updates))
         await asyncio.wait_for(tc._queue.join(), 5)
         await asyncio.wait_for(tc._app_queue.join(), 5)
-        while rr._tasks:
+        while rr._tasks or action_cards._tasks:
             await asyncio.sleep(0.005)
         for w in workers:
             w.cancel()

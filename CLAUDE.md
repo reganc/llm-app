@@ -304,8 +304,11 @@ that app's own history and may use its paid model within that app's budget; noth
 sends a card written by code from the stored arguments, with Approve/Reject. Only a tap from
 the chosen person, in their private chat, on that card, with its one-time nonce, moves it on;
 high-risk actions need a second tap. Proposals expire after 15 min; at most 3 waiting and 10
-an hour; everything is checked again just before running. On the list: run a routine, check
-a watched page, pause/resume a routine (adding one means code and a test). Never: private
+an hour; everything is checked again just before running, in the background so taps keep
+working. On the list: run a routine, check a watched page, pause/resume a routine, re-run
+Mentat's daily or weekly summary (`POST /summaries/{kind}?replace=true` at fleet.yaml's
+`summary.base`, no redirects, 1 MB, 600 s; a headline comes back only if it passes the
+privacy rule). Adding one means code and a test. Never: private
 apps, deleting, settings, secrets, messages, money. Routines and the briefing never get the
 tool. Every step goes to `DATA_DIR/actions/audit.jsonl` (hash-chained, no message text).
 Typed `/run`, `/pause`, `/resume` still act directly: the user wrote them.
