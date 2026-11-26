@@ -4,6 +4,7 @@ import { escHtml, renderMd } from "./md.js";
 import { routineRequest } from "./routine-phrases.js";
 import { initRoutines } from "./routines.js";
 import { initApps } from "./apps.js";
+import { initActions } from "./actions.js";
 import { initSkills } from "./skills.js";
 
 // ─────────────────────── State ───────────────────────
@@ -1380,6 +1381,7 @@ const PALETTE_COMMANDS = [
   { ico: "👁", label: "Watch a page", desc: "alert me when it changes", run: () => Routines.watchPage() },
   { ico: "⚡", label: "Skills", desc: "/name <message>", run: () => Skills.open() },
   { ico: "▦", label: "Apps", desc: "health of every app", run: () => Apps.open() },
+  { ico: "✓", label: "Actions", desc: "proposed actions and their results", run: () => Actions.open() },
   { ico: "⚙", label: "Settings", desc: "model, prompts, key", run: () => openSettings() },
 ];
 
@@ -1562,6 +1564,7 @@ function bindDialogDismiss() {
 // ─────────────────────── Main ───────────────────────
 const Skills = initSkills({ $, el, api, toast });
 const Apps = initApps({ $, el, api });
+const Actions = initActions({ $, el, api, toast });
 const Routines = initRoutines({ $, el, api, toast, skills: Skills });
 
 async function boot() {
@@ -1581,6 +1584,7 @@ async function boot() {
   await Promise.all([refreshSettings(), refreshConvs(), refreshHealth(), refreshAuxList(),
     Routines.refreshUnread()]);
   Apps.refresh();
+  Actions.refresh();
   renderLastSearch();
   newQuickChat();
 }

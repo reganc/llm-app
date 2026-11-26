@@ -46,6 +46,7 @@ from refine import router as refine_router
 from routines import router as routines_router
 from hub import router as hub_router
 from mcp_server import router as mcp_router
+from actions_api import router as actions_router
 from skills import router as skills_router
 from watches import router as watches_router
 
@@ -203,6 +204,7 @@ app.include_router(notify_router)
 app.include_router(skills_router)
 app.include_router(hub_router)
 app.include_router(mcp_router)
+app.include_router(actions_router)
 app.include_router(watches_router)
 app.include_router(briefing_router)
 
