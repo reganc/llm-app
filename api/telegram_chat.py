@@ -13,10 +13,13 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import deque
 
 import agent
 import chat
+import hub
 import images
 import notify
 import ollama as oll
@@ -80,6 +83,7 @@ HELP = (
     "/more: the latest result in full\n"
     "/watches: pages being watched\n"
     "/skills: your saved skills\n"
+    "/apps: how your other apps are doing\n"
     "/search …: always search the web\n"
     "/new: forget this conversation\n"
     "Send a photo, with a question as its caption, to ask about it.\n"
@@ -378,6 +382,15 @@ def _mine(message: dict) -> bool:
             and chat_info.get("id") == chosen and sender.get("id") == chosen)
 
 
+async def _apps_text() -> str:
+    try:
+        statuses = await hub.gather()
+    except Exception as e:
+        log.warning("hub failed: %s", type(e).__name__)
+        return "The apps couldn't be checked just now."
+    return hub.apps_text(statuses, datetime.now(ZoneInfo(CFG.routine_timezone)).date())
+
+
 async def _command(name: str, arg: str) -> bool:
     """True if `name` was a command."""
     if name in ("help", "start"):
@@ -388,6 +401,8 @@ async def _command(name: str, arg: str) -> bool:
         await _say(_watches_text())
     elif name == "skills":
         await _say(_skills_text())
+    elif name == "apps":
+        await _say_long(await _apps_text())
     elif name == "run":
         await _run(arg)
     elif name in ("pause", "resume"):

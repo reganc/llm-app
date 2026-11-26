@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
     labels:
       autoheal: "true"
-    ports: ["11434:11434"]
+    ports: ["127.0.0.1:11434:11434", "172.17.0.1:11434:11434"]  # this machine + containers via host.docker.internal; not the LAN
     volumes: [ollama_models:/root/.ollama]
     environment:
       - OLLAMA_KEEP_ALIVE=5m
@@ -81,7 +81,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-llmrag}
     volumes:
       - db_data:/var/lib/postgresql/data
-    ports: ["5433:5432"]  # host:container — host port shifted to avoid clashing
+    ports: ["127.0.0.1:5433:5432"]  # this machine only; host:container — host port shifted to avoid clashing
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-llm} -d ${POSTGRES_DB:-llmrag}"]
       interval: 5s
@@ -185,6 +185,9 @@ services:
       - ./api:/app
       # The homelab-triage digest, read by the morning briefing (read-only)
       - ${HOMELAB_TRIAGE_VAR:-../homelab-triage/var}:/triage:ro
+      # The app hub (~/apps/HUB.md): the app list, and status cards private apps write (read-only)
+      - ${FLEET_FILE:-../fleet.yaml}:/fleet/fleet.yaml:ro
+      - ${HUB_DIR:-../.hub}:/hub:ro
       # x-cli credentials (only needed if X_SEARCH_ENABLED=true)
       - ${HOME}/.x-cli:/root/.x-cli:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8030", "--reload"]

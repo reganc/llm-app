@@ -565,3 +565,19 @@ def test_photo_questions_search_only_when_asked(env, files):
     n = len(env.payloads)
     say(env, photo("search the web for this product"))
     assert "web_search" in offered(n)
+
+
+def test_apps_command_lists_the_hub(env, monkeypatch):
+    import hub
+    app = hub.App(id="trading", title="Signal Trading", privacy="home")
+
+    async def gather(*a, **k):
+        return [hub.Status(app, up=True, items=[hub.Item(title="Portfolio risk critical", severity="alert")])]
+    monkeypatch.setattr(hub, "gather", gather)
+    assert say(env, msg("/apps")) == ["🔴 Signal Trading\n  • Portfolio risk critical"]
+    assert "/apps" in tc.HELP
+
+    async def broken(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(hub, "gather", broken)
+    assert say(env, msg("/apps")) == ["The apps couldn't be checked just now."]

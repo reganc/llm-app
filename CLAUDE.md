@@ -56,6 +56,8 @@ llm-app/
 │   ├── images.py               # attached images: checked, shrunk, metadata dropped
 │   ├── briefing.py             # morning briefing (no model)
 │   ├── calendar_feed.py        # today's events from a private iCal address
+│   ├── hub.py                  # status cards from the other apps (~/apps/fleet.yaml, HUB.md)
+│   ├── hub_adapters.py         # turns apps' existing status endpoints into cards
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -163,6 +165,7 @@ Coverage:
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
+| `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
 | `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
@@ -269,6 +272,16 @@ notification rules: library results are only counted) and the homelab-triage dig
 (`GOOGLE_CALENDAR_ICS_URL`) is a password: only Google's private iCal address is accepted,
 `RedactCalendar` keeps it out of logs, and errors never include it.
 
+**App hub** (`api/hub.py`, `hub_adapters.py`; contract in `~/apps/HUB.md`): `/apps` in
+Telegram, an "Apps" section in the briefing (warnings, apps down, deadlines within 14 days)
+and `GET /v1/hub`. No model. The app list is `~/apps/fleet.yaml` (mounted at
+`/fleet/fleet.yaml`); private apps write a card to `~/apps/.hub` (mounted read-only at
+`/hub`) so no port is opened to them; others are read by an adapter. Only URLs in
+fleet.yaml on `host.docker.internal` are fetched, without redirects, 2 MB and 4 s max.
+Every title passes its app's privacy rule (`allowed`): never a money amount, and for
+`private` apps no number over 2 digits except a date; anything else is dropped and
+counted as withheld. This bot is internet-facing, so a private app's figures never reach it.
+
 **Images** (`api/images.py`): OpenAI-style `image_url` parts on `/v1/chat/completions`
 (the latest user message's images go on the latest question), `images` on conversation
 messages (not stored), photos in Telegram. Only `data:` URLs are accepted, never links.
@@ -337,6 +350,7 @@ flag False and are unchanged.
 - `GET/POST /v1/watches` · `GET/PATCH/DELETE /v1/watches/{id}` · `POST /v1/watches/preview` · `POST /v1/watches/{id}/check` · `POST /v1/watches/{id}/read` — watched pages
 - `GET/PATCH /v1/briefing` · `POST /v1/briefing/preview` · `POST /v1/briefing/send` — morning briefing
 - `GET/POST /v1/skills` · `PUT/DELETE /v1/skills/{name}` — saved skills
+- `GET /v1/hub` — status cards from the other apps
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
@@ -374,6 +388,7 @@ flag False and are unchanged.
 | `WATCHES_ENABLED` | `true` | Check watched pages on schedule; `false` leaves "check now" working |
 | `GOOGLE_CALENDAR_ICS_URL` | empty | Secret. Google Calendar's "Secret address in iCal format", for the morning briefing |
 | `HOMELAB_TRIAGE_VAR` | `../homelab-triage/var` | Host folder with the triage digest, mounted read-only for the briefing |
+| `FLEET_FILE` · `HUB_DIR` | `../fleet.yaml` · `../.hub` | The app hub's list and the folder private apps write cards to (both read-only) |
 | `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |

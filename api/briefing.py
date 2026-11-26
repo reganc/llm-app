@@ -1,5 +1,5 @@
-"""The morning briefing: today's calendar, new page-watch alerts, routine results and the
-homelab digest, in one Telegram message.
+"""The morning briefing: today's calendar, new page-watch alerts, routine results, the
+homelab digest and what other apps need attention, in one Telegram message.
 
 No model is involved: every line is quoted from its source. Routine results follow
 the same rule as their notifications, so a result that may quote the library is
@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 import calendar_feed
+import hub
 import notify
 import routine_runner
 import routine_store
@@ -158,12 +159,22 @@ def homelab_section(now: datetime) -> str | None:
     return f"Homelab: {line}." + (f"\nNeeds a look: {shown}" if shown else "")
 
 
+async def apps_section(local: datetime) -> str | None:
+    try:
+        statuses = await hub.gather(local.astimezone(timezone.utc))
+    except Exception as e:  # never lose the rest of the briefing to one app
+        log.warning("hub failed: %s", type(e).__name__)
+        return "Apps: couldn't be checked."
+    # The homelab digest has its own section above.
+    return hub.briefing_section([s for s in statuses if s.app.id != "homelab"], local.date())
+
+
 async def compose(now: datetime, since: datetime) -> str:
     cfg = config()
     local = now.astimezone(ZoneInfo(cfg["timezone"]))
     parts = [f"Good morning. {local:%A, %B} {local.day}"]
     parts += [s for s in (await calendar_section(local), watches_section(since),
-                          routines_section(since), homelab_section(now)) if s]
+                          routines_section(since), homelab_section(now), await apps_section(local)) if s]
     if len(parts) == 1:
         parts.append("Nothing new since the last briefing.")
     return "\n\n".join(parts)

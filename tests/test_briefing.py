@@ -286,3 +286,23 @@ def test_settings_status_preview_and_send(c, env):
                                  {"timezone": "Mars/Base"}, {"extra": 1}])
 def test_validation(c, bad):
     assert c.patch("/v1/briefing", json=bad, headers=AUTH).status_code == 422
+
+
+def test_apps_that_need_attention_are_included(env, monkeypatch):
+    import hub
+    tax = hub.App(id="tax", title="Tax Planner", privacy="private")
+    lab = hub.App(id="homelab", title="Homelab", privacy="home")
+
+    async def gather(now=None, *a, **k):
+        assert now == NOW
+        return [hub.Status(tax, items=[hub.Item(title="Withholding may be short", severity="warn")]),
+                hub.Status(lab, items=[hub.Item(title="1 critical", severity="warn")])]
+    monkeypatch.setattr(hub, "gather", gather)
+    text = compose()
+    assert text.endswith("Apps:\n• Tax Planner: Withholding may be short\nSend /apps for all of them.")
+    assert "Homelab: 1 critical" not in text  # the digest has its own section
+
+    async def broken(*a, **k):
+        raise RuntimeError("down")
+    monkeypatch.setattr(hub, "gather", broken)
+    assert compose().endswith("Apps: couldn't be checked.")
