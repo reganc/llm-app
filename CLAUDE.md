@@ -276,7 +276,8 @@ notification rules: library results are only counted) and the homelab-triage dig
 Telegram, an "Apps" section in the briefing (warnings, apps down, deadlines within 14 days)
 and `GET /v1/hub`. No model. The app list is `~/apps/fleet.yaml` (mounted at
 `/fleet/fleet.yaml`); private apps write a card to `~/apps/.hub` (mounted read-only at
-`/hub`) so no port is opened to them; others are read by an adapter. Only URLs in
+`/hub`) so no port is opened to them; others are read by an adapter (trading, delphi, nexus,
+homelab, helm's remote fleet, mentat's digests; reach writes a file card). Only URLs in
 fleet.yaml on `host.docker.internal` are fetched, without redirects, 2 MB and 4 s max.
 Every title passes its app's privacy rule (`allowed`): never a money amount, and for
 `private` apps no number over 2 digits except a date; anything else is dropped and

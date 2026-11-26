@@ -86,9 +86,87 @@ async def homelab(get: Get, base: str, now: datetime) -> list[Item]:
     return [{"title": first.rstrip("."), "severity": "warn" if serious else "info"}]
 
 
+def _names(apps: list[dict], max_n: int = 4) -> str:
+    names = sorted(str(a.get("display_name") or a.get("id") or "?") for a in apps)
+    return ", ".join(names[:max_n]) + (f" and {len(names) - max_n} more" if len(names) > max_n else "")
+
+
+async def helm(get: Get, base: str, now: datetime) -> list[Item]:
+    """helm's remote fleet (apps deployed off this machine): outages, drift, freezes, findings."""
+    apps = [a for a in (await get(f"{base}/fleet")).get("apps") or [] if isinstance(a, dict)]
+    items: list[Item] = []
+
+    def by(status: str) -> list[dict]:
+        return [a for a in apps if a.get("operational_status") == status]
+
+    if out := by("major_outage"):
+        items.append({"title": f"Outage: {_names(out)}", "severity": "alert"})
+    if slow := by("degraded"):
+        items.append({"title": f"Degraded: {_names(slow)}", "severity": "warn"})
+    if drift := [a for a in apps if a.get("diverged")]:
+        items.append({"title": f"Running a different version than recorded: {_names(drift)}", "severity": "warn"})
+    if frozen := [a for a in apps if a.get("frozen")]:
+        items.append({"title": f"Deploys frozen: {_names(frozen)}", "severity": "info"})
+
+    def count(level: str) -> int:
+        return sum(int((a.get("severity_breakdown") or {}).get(level) or 0) for a in apps)
+
+    critical, high = count("critical"), count("high")
+    if critical:
+        flagged = [a for a in apps if (a.get("severity_breakdown") or {}).get("critical")]
+        items.append({"title": f"{critical} critical findings open: {_names(flagged)}", "severity": "warn"})
+    elif high:
+        items.append({"title": f"{high} high-severity findings open across the remote apps", "severity": "info"})
+    if not items or all(i["severity"] == "info" for i in items):
+        up, unwatched = len(by("operational")), len(by("unknown"))
+        items.insert(0, {"title": f"{up} remote app{'s' if up != 1 else ''} operational"
+                                  + (f"; {unwatched} not monitored" if unwatched else ""), "severity": "info"})
+    return items
+
+
+def _iso_week(at: datetime) -> tuple[int, int]:
+    year, week, _ = at.isocalendar()
+    return year, week
+
+
+async def mentat(get: Get, base: str, now: datetime) -> list[Item]:
+    """Whether mentat's digests are current, and Steward's clash count. Digest text is never passed on."""
+    items: list[Item] = []
+    s = await get(f"{base}/summaries?limit=5")
+    daily = [str(r.get("id", "")) for r in s.get("daily") or [] if isinstance(r, dict)]
+    stamps = sorted(d.rsplit("-", 1)[-1] for d in daily if d.rsplit("-", 1)[-1].isdigit())
+    newest = datetime.strptime(stamps[-1], "%Y%m%d").date() if stamps else None
+    today = now.date()
+    if newest is None:
+        items.append({"title": "No daily digests yet", "severity": "warn"})
+    elif (today - newest).days > 1:
+        items.append({"title": f"No daily digest since {newest.isoformat()}", "severity": "warn"})
+    else:
+        topics = sorted({d.removeprefix("daily-")[:-9] for d in daily if d.endswith(f"-{stamps[-1]}")} - {""})
+        items.append({"title": f"Daily digests for {newest.isoformat()}: {', '.join(topics[:5])}", "severity": "info"})
+
+    weekly = [str(r.get("id", "")) for r in s.get("weekly") or [] if isinstance(r, dict)]
+    weeks = sorted((int(y), int(w)) for y, w in
+                   (i.removeprefix("weekly-").split("-W") for i in weekly if "-W" in i)
+                   if y.isdigit() and w.isdigit())
+    if weeks:
+        y, w = weeks[-1]
+        cy, cw = _iso_week(now)
+        behind = (cy - y) * 52 + (cw - w)
+        if behind > 1:
+            items.append({"title": f"Weekly synthesis hasn't run since week {w} of {y}", "severity": "warn"})
+
+    clashes = len((await get(f"{base}/steward/collisions")).get("collisions") or [])
+    if clashes:
+        items.append({"title": f"Steward: {clashes} port or subnet clashes between repos", "severity": "info"})
+    return items
+
+
 ADAPTERS: dict[str, Callable[[Get, str, datetime], Awaitable[list[Item]]]] = {
     "trading": trading,
     "delphi": delphi,
     "nexus": nexus,
     "homelab": homelab,
+    "helm": helm,
+    "mentat": mentat,
 }
