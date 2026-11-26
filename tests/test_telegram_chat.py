@@ -359,10 +359,10 @@ def test_library_tool_only_when_allowed(env):
     def tools():
         return [t["function"]["name"] for t in env.payloads[-1].get("tools", [])]
     say(env, msg("hello"))
-    assert tools() == ["web_search"]
+    assert tools() == ["web_search", "propose_action"]
     env.settings[tc.LIBRARY] = True
     say(env, msg("hello"))
-    assert tools() == ["web_search", "library_search"]
+    assert tools() == ["web_search", "library_search", "propose_action"]
 
 
 def test_current_questions_and_search_command_search_first(env):
@@ -431,11 +431,11 @@ def test_long_answers_are_split_and_bounded(env):
 
 # ── polling ──────────────────────────────────────────────────────────────────
 
-def test_poll_uses_the_saved_offset_and_only_asks_for_messages(env):
+def test_poll_uses_the_saved_offset_and_asks_for_messages_and_button_taps(env):
     env.settings[tc.OFFSET] = 77
     run(tc.poll_once())
     method, payload = env.calls[0]
-    assert method == "getUpdates" and payload["offset"] == 77 and payload["allowed_updates"] == ["message"]
+    assert method == "getUpdates" and payload["offset"] == 77 and payload["allowed_updates"] == ["message", "callback_query"]
 
 
 def test_loop_backs_off_waits_when_off_and_stops_cleanly(env, monkeypatch, caplog):
