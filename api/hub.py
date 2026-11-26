@@ -277,8 +277,12 @@ router = APIRouter(prefix="/v1/hub", tags=["hub"], dependencies=[Depends(verify_
 
 
 @router.get("")
-async def get_hub():
-    statuses = await gather()
+def status_json(statuses: list[Status]) -> dict:
+    """What /v1/hub and the MCP fleet_status tool return: titles have passed the privacy rule."""
     return {"apps": [{"id": s.app.id, "title": s.app.title, "ui": s.app.ui, "level": s.level, "up": s.up,
                       "items": [i.model_dump(mode="json") for i in s.items], "withheld": s.withheld,
                       "problem": s.problem} for s in statuses]}
+
+
+async def get_hub():
+    return status_json(await gather())

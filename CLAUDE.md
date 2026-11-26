@@ -64,6 +64,7 @@ llm-app/
 │   ├── actions.py              # action gate: the model proposes, the user approves, code acts
 │   ├── action_cards.py         # approval cards and button taps in Telegram
 │   ├── action_log.py           # hash-chained log of every proposal and outcome
+│   ├── mcp_server.py           # POST /mcp: fleet status + propose actions for MCP clients
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -173,6 +174,7 @@ Coverage:
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
 | `test_actions.py` · `test_action_cards.py` | the gate: targets, limits, expiry, one use per approval, second tap for high risk, re-check before running, log chain; the model only gets a card sent, only the user's tap on that card runs it |
+| `test_mcp.py` | the MCP endpoint: key and origin, handshake, exactly four tools, proposals only send a card (refused while chat is off), status |
 | `test_executor.py` | the executor: token, only listed home apps, label match, order, cooldown and daily cap from its log, health, log chain (fake Docker) |
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
@@ -316,7 +318,13 @@ privacy rule), restart an app (high risk, second tap). Restarts go to the execut
 app whose fleet.yaml entry is `home` with `restart: {project, services}` (read-only mount),
 finds containers by compose label, one at a time, once per app per 10 min, 6 a day, waits
 90 s for `health`, and logs to its own hash-chained `restarts.jsonl`. llm-api has no Docker
-access. Adding an action means code and a test. Never: private
+access. Adding an action means code and a test.
+**MCP** (`api/mcp_server.py`, `POST /mcp`, same bearer key; an Origin header must be
+localhost): `fleet_status` (the hub), `list_actions`, `propose_action`, `action_status`. No
+tool runs or approves anything: a proposal from an MCP client is a card on the user's phone
+like any other, naming the client ("what it read before is unknown"), and is refused while
+chat from Telegram is off, since that is where the tap arrives. Connect Claude Code with
+`claude mcp add --transport http fleet http://localhost:8030/mcp --header "Authorization: Bearer …"`. Never: private
 apps, deleting, settings, secrets, messages, money. Routines and the briefing never get the
 tool. Every step goes to `DATA_DIR/actions/audit.jsonl` (hash-chained, no message text).
 Typed `/run`, `/pause`, `/resume` still act directly: the user wrote them.
@@ -390,6 +398,7 @@ flag False and are unchanged.
 - `GET/PATCH /v1/briefing` · `POST /v1/briefing/preview` · `POST /v1/briefing/send` — morning briefing
 - `GET/POST /v1/skills` · `PUT/DELETE /v1/skills/{name}` — saved skills
 - `GET /v1/hub` — status cards from the other apps
+- `POST /mcp` — MCP (streamable HTTP, JSON replies): `fleet_status`, `list_actions`, `propose_action`, `action_status`
 - `POST /v1/refine/run` · `GET /v1/refine/status` — LLM-driven library refinement (per-source summary + tags + embedded gist chunk)
 - `POST /v1/finetune/trigger` · `GET /v1/finetune/status[/{id}]`
 - `GET  /health` · `GET /metrics`
