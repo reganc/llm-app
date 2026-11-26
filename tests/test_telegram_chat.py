@@ -10,6 +10,7 @@ import pytest
 
 import action_cards
 import agent
+import chat_memory
 import ollama as oll
 import routine_runner as rr
 import routine_store as store
@@ -38,6 +39,7 @@ def env(monkeypatch, tmp_path):
     store.load(tmp_path / "r")
     watch_store.load(tmp_path / "w")
     skills.load(tmp_path / "skills.json")
+    chat_memory.load(tmp_path / "telegram_history.json")
     rr.reset()
     tc.reset()
     cfg = dataclasses.replace(tc.CFG, telegram_bot_token=TOKEN, search_enabled=True, memory_enabled=True,
@@ -384,8 +386,8 @@ def test_conversation_is_remembered_then_forgotten(env, monkeypatch):
     say(env, msg("again?"))
     assert "Rex" not in str(env.payloads[-1]["messages"])
     say(env, msg("my dog is Rex"))
-    later = time.monotonic() + tc._HISTORY_TTL_S + 1
-    monkeypatch.setattr(tc.time, "monotonic", lambda: later)
+    later = time.time() + chat_memory.TTL_S + 1
+    monkeypatch.setattr(chat_memory.time, "time", lambda: later)
     say(env, msg("hm"))
     assert "Rex" not in str(env.payloads[-1]["messages"])
 
@@ -648,3 +650,13 @@ def test_research_needs_mentat_in_the_app_list(env, monkeypatch):
     import ask_apps
     monkeypatch.setattr(ask_apps, "askable", lambda apps=None: {})
     assert say(env, msg("/research kv caches")) == ["Research needs mentat in the app list (fleet.yaml, ask: mentat)."]
+
+
+def test_older_turns_than_the_old_limit_of_three_are_remembered(env):
+    say(env, msg("my dog is Rex"))
+    for i in range(5):
+        say(env, msg(f"unrelated question {i}"))
+    say(env, msg("what's my dog called?"))
+    sent = env.payloads[-1]["messages"]
+    assert "my dog is Rex" in [m["content"] for m in sent]
+    assert sum(1 for m in sent if m["role"] == "user") == 7     # 6 earlier questions + this one

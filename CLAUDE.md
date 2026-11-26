@@ -50,6 +50,7 @@ llm-app/
 │   ├── routine_check.py        # keeps only points their sources back
 │   ├── notify.py               # Telegram notifications
 │   ├── telegram_chat.py        # chat and commands from Telegram
+│   ├── chat_memory.py          # the Telegram conversation it remembers (saved, bounded)
 │   ├── skills.py               # saved instructions (/name)
 │   ├── watches.py              # /v1/watches API
 │   ├── watch_runner.py         # page-watch schedule and alerts
@@ -173,6 +174,7 @@ Coverage:
 | `test_routine_schedule.py` · `test_routine_store.py` · `test_routine_runner.py` · `test_routines_api.py` | routines: DST/weekday math, atomic bounded storage, crash recovery, missed-run skip, one run at a time, source mapping, unsourced labelling, API |
 | `test_routine_memory.py` · `test_notify.py` · `test_routine_draft.py` · `test_routine_phrases.py` | only-what's-new, Telegram (content rules, retries, token redaction), plain-language drafts, chat phrase detection (needs node) |
 | `test_routine_query.py` · `test_routine_check.py` · `test_news_search.py` | search phrase from a task, per-point source check, news topic filter/widening/extra sites |
+| `test_chat_memory.py` | Telegram memory: order, saved across restarts (0600), per-turn expiry, 20 turns, budget, another chat never sees it, /new erases the file |
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
@@ -271,7 +273,10 @@ One long-poll reader; only the chosen private chat is answered, others are ignor
 silently. Code reads commands from the user's own typed messages (never forwarded
 ones or text inside a sentence); the only actions are list, run, pause and resume
 routines. Each update is marked seen before it is acted on, and messages older than
-15 minutes are skipped. Questions use the read-only agent loop with `store:false`,
+15 minutes are skipped. It remembers the conversation (`chat_memory.py`): up to 20 question/answer
+pairs, each forgotten after 24 hours, the newest within 16K characters sent with each question;
+saved in `DATA_DIR/telegram_history.json` (0600) across restarts, tied to the chosen chat, erased
+by `/new`. Questions use the read-only agent loop with `store:false`,
 without the library unless `telegram_library` is on. The model claimed to have acted
 in testing, so requests to act get a fixed reply and claims are corrected in code.
 Never log message text.
