@@ -97,6 +97,7 @@ HELP = (
     "/skills: your saved skills\n"
     "/apps: how your other apps are doing\n"
     "/mentat …, /nexus …: ask that app (its answer, its sources)\n"
+    "/research …: a sourced report from mentat (a few minutes)\n"
     "/search …: always search the web\n"
     "Ask in your own words to run, pause or resume a routine, check a page, re-run "
     "Mentat's summary or restart an app: "
@@ -410,10 +411,10 @@ async def _work() -> None:
 async def _app_work() -> None:
     """Questions for other apps, one at a time, separate from chat."""
     while True:
-        app, question = await _app_queue.get()
+        app, question, kind = await _app_queue.get()
         typing = asyncio.create_task(_typing())
         try:
-            reply = await ask_apps.ask(app, question)
+            reply = await (ask_apps.research if kind == "research" else ask_apps.ask)(app, question)
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -469,11 +470,35 @@ async def _ask_app(app: hub.App, question: str) -> None:
         await _say(f"Ask it something, like: /{app.id} what changed today?")
         return
     try:
-        _app_queue.put_nowait((app, question))
+        _app_queue.put_nowait((app, question, "ask"))
     except asyncio.QueueFull:
         await _say("I'm still waiting on your earlier questions to other apps.")
         return
     await _say(f"Asking {app.title}. It can take a few minutes.")
+
+
+_RESEARCH_CHARS = 300
+
+
+async def _research(topic: str) -> None:
+    app = next((a for a in ask_apps.askable().values() if a.ask == "mentat"), None)
+    if app is None:
+        await _say("Research needs mentat in the app list (fleet.yaml, ask: mentat).")
+        return
+    topic = " ".join(topic.split())
+    if len(topic) < 3:
+        await _say("Research what? Like: /research speculative decoding for faster inference")
+        return
+    if len(topic) > _RESEARCH_CHARS:
+        await _say(f"Keep the topic under {_RESEARCH_CHARS} characters.")
+        return
+    try:
+        _app_queue.put_nowait((app, topic, "research"))
+    except asyncio.QueueFull:
+        await _say("I'm still waiting on your earlier questions to other apps.")
+        return
+    await _say(f"Researching “{topic}” in {app.title}: it reads sources and checks its citations. "
+               "Usually 1–3 minutes; the report comes here.")
 
 
 async def _ask(question: str, **kwargs) -> None:
@@ -526,6 +551,8 @@ async def _command(name: str, arg: str) -> bool:
         await _say("Started a new conversation.")
     elif name == "search" and arg:
         await _ask(arg, force_search=True)
+    elif name == "research":
+        await _research(arg)
     elif app := ask_apps.askable().get(name):
         await _ask_app(app, arg)
     else:

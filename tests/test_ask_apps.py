@@ -87,3 +87,69 @@ def test_an_address_outside_the_rule_is_never_called():
     def handler(r):
         raise AssertionError("called")
     assert _ask(app, handler) == "X couldn't answer. That app's address isn't allowed."
+
+
+# ── /research: mentat's research pipeline ────────────────────────────────────
+
+REPORT = {
+    "id": "16b1e04ae0d1", "query": "speculative decoding",
+    "body_md": "# Speculative Decoding\n\n**Drafts** are verified in parallel.",
+    "claims": [{"id": "c1", "sourced": True, "cite_available": True},
+               {"id": "c2", "sourced": True, "cite_available": True},
+               {"id": "c3", "sourced": False, "cite_available": False}],
+    "degraded": True, "revision_count": 0,
+    "review": {"passed": True, "provenance_completeness": 1.0, "independent_reviewer": False},
+}
+EVIDENCE = {"c1": {"source_title": "Hybrid Spark", "source_url": "http://arxiv.org/abs/2601.1"},
+            "c2": {"source_title": "Hybrid Spark", "source_url": "http://arxiv.org/abs/2601.1"}}
+
+
+def _research(handler, topic="speculative decoding"):
+    async def go():
+        async with _client(handler) as c:
+            return await ask_apps.research(MENTAT, topic, c)
+    return asyncio.run(go())
+
+
+def test_research_relays_the_report_its_check_and_distinct_sources():
+    seen = []
+
+    def handler(req):
+        seen.append((req.method, req.url.path))
+        if req.method == "POST":
+            assert json.loads(req.content) == {"query": "speculative decoding", "max_sources": 5}
+            return httpx.Response(200, json=REPORT)
+        return httpx.Response(200, json=EVIDENCE[req.url.path.rsplit("/", 1)[1]])
+    text = _research(handler)
+    assert seen == [("POST", "/research"), ("GET", "/research/16b1e04ae0d1/cite/c1"),
+                    ("GET", "/research/16b1e04ae0d1/cite/c2")]
+    assert text.startswith("Mentat research: speculative decoding\n\nSpeculative Decoding\n\nDrafts are verified")
+    assert ("Checked: 3 claims, 2 cite a source it read, 1 marked as inference; 100% of the citations "
+            "check out; reviewed by the same local model that wrote it; written by mentat's local model.") in text
+    assert "Sources:\n[1] Hybrid Spark http://arxiv.org/abs/2601.1" in text and "[2]" not in text
+    assert text.endswith("Report 16b1e04ae0d1 is kept in Mentat.")
+
+
+def test_a_failed_review_is_said_plainly():
+    report = {**REPORT, "claims": [], "degraded": False,
+              "review": {"passed": False, "provenance_completeness": 0.5, "independent_reviewer": True}}
+    text = _research(lambda r: httpx.Response(200, json=report))
+    assert "Checked: 0 claims, 0 cite a source it read; 50% of the citations check out; it did NOT pass its review" in text
+
+
+def test_research_failures_are_sentences():
+    assert _research(lambda r: httpx.Response(500)) == "Mentat couldn't research that. It answered with an error (500)."
+    assert _research(lambda r: httpx.Response(200, json={**REPORT, "body_md": ""})) == \
+        "Mentat couldn't research that. It wrote an empty report."
+
+    def slow(r):
+        raise httpx.ReadTimeout("slow")
+    assert "took too long; the report may still appear" in _research(slow)
+
+
+def test_a_failing_cite_lookup_only_drops_that_source():
+    def handler(req):
+        if req.method == "POST":
+            return httpx.Response(200, json=REPORT)
+        return httpx.Response(404) if req.url.path.endswith("c1") else httpx.Response(200, json=EVIDENCE["c2"])
+    assert "[1] Hybrid Spark" in _research(handler)

@@ -621,3 +621,30 @@ def test_a_forwarded_app_command_is_not_run(env, monkeypatch):
         raise AssertionError("asked")
     monkeypatch.setattr(ask_apps, "ask", never)
     say(env, msg("/nexus anything", forward_origin={"type": "user"}))
+
+
+# ── /research ────────────────────────────────────────────────────────────────
+
+def test_research_command_queues_mentat_and_relays_the_report(env, monkeypatch):
+    import ask_apps
+    import hub
+    mentat = hub.App(id="mentat", title="Mentat", privacy="home", ask="mentat",
+                     summary={"base": "http://host.docker.internal:8400"})
+    monkeypatch.setattr(ask_apps, "askable", lambda apps=None: {"mentat": mentat})
+    asked = []
+
+    async def research(app, topic, client=None):
+        asked.append((app.id, topic))
+        return "Mentat research: kv caches\n\nReport body."
+    monkeypatch.setattr(ask_apps, "research", research)
+    out = say(env, msg("/research   kv  caches "))
+    assert out[0].startswith("Researching “kv caches” in Mentat") and out[1].startswith("Mentat research: kv caches")
+    assert asked == [("mentat", "kv caches")] and env.payloads == []        # no local model involved
+    assert say(env, msg("/research ok")) == ["Research what? Like: /research speculative decoding for faster inference"]
+    assert say(env, msg("/research " + "x" * 301)) == ["Keep the topic under 300 characters."]
+
+
+def test_research_needs_mentat_in_the_app_list(env, monkeypatch):
+    import ask_apps
+    monkeypatch.setattr(ask_apps, "askable", lambda apps=None: {})
+    assert say(env, msg("/research kv caches")) == ["Research needs mentat in the app list (fleet.yaml, ask: mentat)."]

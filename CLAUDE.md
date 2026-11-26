@@ -180,7 +180,7 @@ Coverage:
 | `test_actions_api.py` · `test_actions_view.py` | the web panel: list newest first, reject (logged, card updated), no approve route, expiry on listing; words per status (needs node) |
 | `test_mcp.py` | the MCP endpoint: key and origin, handshake, exactly four tools, proposals only send a card (refused while chat is off), status |
 | `test_executor.py` | the executor: token, only listed home apps, label match, order, cooldown and daily cap from its log, health, log chain (fake Docker) |
-| `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
+| `test_ask_apps.py` | /research relay (report, check line, distinct sources, failures); which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
 | `test_voice.py` | voice notes: shown back then answered, spoken commands stay questions, refusals, length limit, failures and transcripts never logged, one at a time |
@@ -307,7 +307,11 @@ question to that app's own ask endpoint (mentat `POST /ask`, nexus `POST /api/as
 its answer with its sources or confidence. No model here. Only apps whose fleet.yaml entry has
 `ask:` and privacy `home`, at their `summary.base` (host.docker.internal only, no redirects, 1 MB,
 300 s). A separate queue, so a slow answer never holds up chat. Asking records the question in
-that app's own history and may use its paid model within that app's budget; nothing else changes.
+that app's own history and may use its paid model within that app's budget; nothing else changes. `/research …` sends a topic to mentat's
+research pipeline instead (`POST /research`, 900 s): the reply relays the report, how it was
+checked (claims sourced, citations resolving, same-model review, local model), its distinct
+sources (one `GET /research/{id}/cite/{claim}` per sourced claim) and the report id kept in mentat.
+An empty report is said, never sent blank.
 
 **Action gate** (`api/actions.py`, `action_cards.py`, `action_log.py`; design in
 `docs/action-gate.md`): in Telegram the model's one way to act is `propose_action`, which
