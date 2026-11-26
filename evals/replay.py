@@ -52,10 +52,19 @@ TELEGRAM_FILE = "/app/data/telegram_history.json"   # inside llm-api
 HISTORY_MESSAGES = 12          # SPA: earlier messages sent with a question
 TELEGRAM_TTL_S = 24 * 3600     # matches chat_memory.TTL_S
 MIN_CHARS = 8                  # "thanks", "ok" aren't worth two model calls
+# How ingest.py opens a document or article conversation. The app stores a fixed
+# reply to it; the model never answers it, so it's history, not a question.
+# (Replayed as questions, all three needed citation repair, 2026-11-26.)
+LOADED = ("Please load this document:", "Please load this article:")
 
 
 def _usable(text) -> bool:
     return isinstance(text, str) and len(text.strip()) >= MIN_CHARS and not text.lstrip().startswith("/")
+
+
+def _asked(text) -> bool:
+    """A message the model actually answered: not a command, a one-word reply or a loaded file."""
+    return _usable(text) and not text.startswith(LOADED)
 
 
 def from_conversation(conv: dict) -> list[dict]:
@@ -64,7 +73,7 @@ def from_conversation(conv: dict) -> list[dict]:
             if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     out = []
     for i, m in enumerate(msgs):
-        if m["role"] == "user" and _usable(m["content"]):
+        if m["role"] == "user" and _asked(m["content"]):
             history = [{"role": h["role"], "content": h["content"]} for h in msgs[:i]][-HISTORY_MESSAGES:]
             out.append({"id": f"spa-{str(conv.get('id', ''))[:8]}-{i}", "source": "spa",
                         "at": conv.get("updated_at") or conv.get("created_at") or "",

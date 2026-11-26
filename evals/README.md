@@ -96,6 +96,10 @@ report lists regressions first, then fixes, then the most differences.
   prompt or `propose_action`), with memory off and 1024 tokens, as in the bot.
 - The questions and answers are private: written only to `evals/results/`
   (gitignored, mode 0600) as `.json` and a readable `.md`, never printed.
+- A document or article conversation's first message ("Please load this
+  document: …") is history, never a question: the app stores a fixed reply to
+  it. Replayed as a question it looked like a citation problem (all three
+  needed repair); the 17 real follow-ups in those conversations needed none.
 - Calibrated 2026-11-26 with the active model against itself (`--candidate
   default:latest`): at temperature 0 the answers were identical, with no
   differences flagged; latency for the same answer varied up to 2×.
