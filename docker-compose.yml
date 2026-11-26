@@ -162,6 +162,9 @@ services:
       - GOOGLE_CALENDAR_ICS_URL=${GOOGLE_CALENDAR_ICS_URL:-}
       # Optional: Telegram notifications for routines (choose the chat in Settings)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Secret shared with the executor (approved restarts); empty = restarts off
+      - ACTIONS_EXECUTOR_TOKEN=${ACTIONS_EXECUTOR_TOKEN:-}
+      - ACTIONS_EXECUTOR_URL=http://executor:8000
       # Web search
       - SEARCH_ENABLED=true
       - SEARCH_ALWAYS=false
@@ -197,7 +200,30 @@ services:
       db:
         condition: service_healthy
 
+  # Approved restarts only (api/actions.py → executor/main.py). The one service
+  # with the Docker socket: no published port (only llm-api reaches it on this
+  # network), code baked into its image, fleet.yaml read-only, nothing else mounted.
+  executor:
+    build: ./executor
+    container_name: llm-executor
+    restart: unless-stopped
+    environment:
+      - ACTIONS_EXECUTOR_TOKEN=${ACTIONS_EXECUTOR_TOKEN:-}
+      - FLEET_FILE=/fleet/fleet.yaml
+      - DATA_DIR=/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${FLEET_FILE:-../fleet.yaml}:/fleet/fleet.yaml:ro
+      - executor_data:/data
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
 volumes:
+  executor_data:
   ollama_models:
   searxng_data:
   app_data:

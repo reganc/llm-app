@@ -64,6 +64,7 @@ class App:
     health: str | None = None
     summary: dict[str, str] = field(default_factory=dict)
     ask: str | None = None          # how to ask it questions (ask_apps.py); home apps only
+    restart: dict | None = None     # {project, services}: approved restarts (actions.py); home only
 
 
 @dataclass
@@ -93,6 +94,20 @@ def _safe_url(url: Any) -> str | None:
     return url.rstrip("/") if parts.scheme == "http" and parts.hostname in _ALLOWED_HOSTS else None
 
 
+_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+
+
+def _restart(spec: Any) -> dict | None:
+    """{project, services} with Docker-safe names, or None. The executor checks it again."""
+    if not isinstance(spec, dict):
+        return None
+    project, services = spec.get("project"), spec.get("services")
+    if not (isinstance(project, str) and _NAME.match(project) and isinstance(services, list) and services
+            and all(isinstance(s, str) and _NAME.match(s) for s in services)):
+        return None
+    return {"project": project, "services": list(dict.fromkeys(services))}
+
+
 def load_fleet(path: Path | None = None) -> list[App]:
     """The apps in fleet.yaml. Entries that don't fit the rules are skipped and logged."""
     try:
@@ -114,8 +129,10 @@ def load_fleet(path: Path | None = None) -> list[App]:
             summary.pop("base")
         ui = entry.get("ui") if isinstance(entry.get("ui"), str) and entry["ui"].startswith("http") else None
         ask = entry.get("ask") if privacy == "home" and isinstance(entry.get("ask"), str) else None
+        restart = _restart(entry.get("restart")) if privacy == "home" else None
         apps.append(App(id=entry["id"], title=str(entry.get("title") or entry["id"])[:40], privacy=privacy,
-                        ui=ui, health=_safe_url(entry.get("health")), summary=summary, ask=ask))
+                        ui=ui, health=_safe_url(entry.get("health")), summary=summary, ask=ask,
+                        restart=restart))
     return apps
 
 

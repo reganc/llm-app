@@ -74,6 +74,8 @@ class Config:
     google_calendar_ics_url: str
 
     telegram_bot_token: str
+    actions_executor_url: str
+    actions_executor_token: str
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -144,6 +146,10 @@ CFG = Config(
     google_calendar_ics_url=os.getenv("GOOGLE_CALENDAR_ICS_URL", "").strip(),
     # Secret. Only notify.py uses it; the chat is chosen in Settings.
     telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+    # Approved restarts (actions.py → executor/). Fixed address, never from a model;
+    # the token is a secret shared with the executor. Empty = restarts off.
+    actions_executor_url=os.getenv("ACTIONS_EXECUTOR_URL", "http://executor:8000").rstrip("/"),
+    actions_executor_token=os.getenv("ACTIONS_EXECUTOR_TOKEN", "").strip(),
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

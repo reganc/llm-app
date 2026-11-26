@@ -67,8 +67,8 @@ def test_proposal_stores_ids_not_names_and_the_card_says_what_will_run(clock):
 def test_unknown_action_target_or_state_is_refused_with_what_exists(clock):
     routine("News")
     routine("Newsletter digest")
-    with pytest.raises(actions.Refused, match="Unknown action 'restart_app'"):
-        propose("restart_app", "mentat")
+    with pytest.raises(actions.Refused, match="Unknown action 'delete_files'"):
+        propose("delete_files", "mentat")
     with pytest.raises(actions.Refused, match="no routine called “Weather”. Yours: .*“News”"):
         propose(target="Weather")
     with pytest.raises(actions.Refused, match="More than one"):
@@ -279,8 +279,8 @@ def test_tool_lists_the_users_routines_and_pages(clock):
     watch_store.create({"name": "GPU price", "url": "https://shop.example/gpu", "enabled": True})
     fn = actions.tool()["function"]
     assert fn["name"] == "propose_action"
-    assert fn["parameters"]["properties"]["action"]["enum"] == ["run_routine", "check_watch", "set_routine", "rerun_summary"]
-    assert "“News”, “Weekly review” (paused)" in fn["description"]
+    assert fn["parameters"]["properties"]["action"]["enum"] == ["run_routine", "check_watch", "set_routine", "rerun_summary", "restart_app"]
+    assert "“News”" in fn["description"] and "“Weekly review” (paused)" in fn["description"]
     assert "“GPU price”" in fn["description"]
 
 
@@ -352,3 +352,95 @@ def test_rerun_failures_are_sentences(mentat):
     mentat.reply = httpx.ReadTimeout("slow")
     out = run(actions.execute(approved(action="rerun_summary", target="weekly")["id"]))
     assert out["result"] == "Mentat took too long."
+
+
+# ── restart_app (through the executor) ───────────────────────────────────────
+
+import dataclasses  # noqa: E402
+
+MENTAT_R = dataclasses.replace(MENTAT, health="http://host.docker.internal:8400/health",
+                               restart={"project": "mentat", "services": ["api", "worker", "beat"]})
+
+
+@pytest.fixture
+def restarts(clock, monkeypatch):
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [MENTAT_R, dataclasses.replace(
+        MENTAT, id="tax-planner", title="Tax Planner", privacy="private", restart=None)])
+    monkeypatch.setattr(actions, "CFG", dataclasses.replace(actions.CFG, actions_executor_token="s" * 64,
+                                                            actions_executor_url="http://executor:8000"))
+    seen = []
+    restarts.reply = (200, {"ok": True, "containers": ["mentat-api-1", "mentat-worker-1", "mentat-beat-1"],
+                            "health": "ok", "seconds": 14, "problem": None})
+
+    def handler(request):
+        seen.append(request)
+        status, body = restarts.reply
+        if isinstance(body, Exception):
+            raise body
+        return httpx.Response(status, json=body)
+    real = httpx.AsyncClient
+    monkeypatch.setattr(actions.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    restarts.seen = seen
+    return restarts
+
+
+def test_restart_is_high_risk_and_names_what_restarts(restarts):
+    p = propose("restart_app", "mentat")
+    assert p["risk"] == "high" and p["args"] == {"app": "mentat"}
+    text = actions.card_text(p)
+    assert text.splitlines()[:3] == ["Proposed action · high risk", "Restart Mentat",
+                                     "Containers: api, worker, beat (Docker project mentat)."]
+    assert "waits up to 90 s for http://host.docker.internal:8400/health" in text
+    record, step = actions.decide(p["id"], "approve", p["nonce"])
+    assert step == "confirm" and actions.buttons(record)[0][0] == "Yes: Restart Mentat"
+
+
+def test_restart_needs_the_token_a_listed_home_app_and_a_gap(restarts, monkeypatch):
+    with pytest.raises(actions.Refused, match="can't be restarted from here. These can: “Mentat”"):
+        propose("restart_app", "tax planner")
+    with pytest.raises(actions.Refused, match="can't be restarted"):
+        propose("restart_app", "ollama")
+    assert propose("restart_app", "Mentat")["args"] == {"app": "mentat"}    # by title too
+    p = next(iter(actions._records.values()))
+    actions.decide(p["id"], "reject", p["nonce"])
+    a = propose("restart_app", "mentat")                   # a rejected one doesn't count
+    actions.decide(a["id"], "approve", a["nonce"])
+    actions.decide(a["id"], "confirm", actions.get(a["id"])["nonce"])
+    with pytest.raises(actions.Refused, match="less than 10 minutes ago"):
+        propose("restart_app", "mentat")
+    monkeypatch.setattr(actions, "CFG", dataclasses.replace(actions.CFG, actions_executor_token=""))
+    with pytest.raises(actions.Refused, match="Restarts aren't set up"):
+        propose("restart_app", "mentat")
+
+
+def confirmed(target="mentat"):
+    p = propose("restart_app", target)
+    r, _ = actions.decide(p["id"], "approve", p["nonce"])
+    return actions.decide(p["id"], "confirm", r["nonce"])[0]
+
+
+def test_restart_calls_the_executor_with_its_token_and_reports(restarts):
+    a = confirmed()
+    out = run(actions.execute(a["id"]))
+    (req,) = restarts.seen
+    assert str(req.url) == "http://executor:8000/restart"
+    assert req.headers["authorization"] == "Bearer " + "s" * 64
+    assert json.loads(req.content) == {"app": "mentat", "action_id": a["id"]}
+    assert out["status"] == "done" and out["result"] == (
+        "Restarted mentat-api-1, mentat-worker-1, mentat-beat-1 in 14 s; it answers its health check.")
+
+
+def test_restart_problems_are_sentences(restarts):
+    restarts.reply = (429, {"detail": "mentat was restarted less than 10 minutes ago."})
+    out = run(actions.execute(confirmed()["id"]))
+    assert out["status"] == "failed"
+    assert out["result"] == "The executor refused: mentat was restarted less than 10 minutes ago."
+    actions._records.clear()
+    restarts.reply = (200, {"ok": False, "containers": ["mentat-api-1"], "health": "failed",
+                            "seconds": 95, "problem": "It didn't answer its health check within 90 s."})
+    out = run(actions.execute(confirmed()["id"]))
+    assert out["result"] == "Restarted mentat-api-1, but: It didn't answer its health check within 90 s."
+    actions._records.clear()
+    restarts.reply = (200, httpx.ConnectError("down"))
+    assert run(actions.execute(confirmed()["id"]))["result"] == "The executor couldn't be reached."

@@ -9,7 +9,9 @@ and everything is checked again just before it runs.
 
 On the list (adding one means code and a test, never config): run a routine
 now, check a watched page now, pause or resume a routine, re-run mentat's
-daily or weekly summary. Never on it: anything
+daily or weekly summary, restart an app (high risk: a second tap; done by the
+executor, the only part with Docker access, and only for apps whose fleet.yaml
+entry has `restart:`). Never on it: anything
 for a private app, deleting, settings, secrets, messages to anyone, money.
 
 Proposals live in DATA_DIR/actions/pending.json (atomic writes, kept 7 days so
@@ -225,11 +227,83 @@ async def _run_rerun(a: dict, hooks: dict) -> str:
     return _summary_result(a["kind"], body)
 
 
+RESTART_COOLDOWN_S = 600   # the executor enforces it too
+RESTART_TIMEOUT_S = 180.0  # restarting, then up to 90 s for the health check
+
+
+def _restartable() -> list[hub.App]:
+    return [a for a in hub.load_fleet() if a.privacy == "home" and a.restart]
+
+
+def _resolve_restart(args: dict) -> dict:
+    if not CFG.actions_executor_token:
+        raise Refused("Restarts aren't set up (ACTIONS_EXECUTOR_TOKEN is empty).")
+    apps = _restartable()
+    wanted = " ".join(str(args.get("target") or "").split()).lower()
+    found = next((a for a in apps if wanted in (a.id, a.title.lower())), None)
+    if found is None:
+        names = ", ".join(f"“{a.title}”" for a in apps) or "none"
+        raise Refused(f"“{args.get('target')}” can't be restarted from here. These can: {names}.")
+    recent = [r for r in _records.values() if r["action"] == "restart_app"
+              and r["args"].get("app") == found.id and r["status"] in ("approved", "running", "done")
+              and _now() - r["created_at"] < RESTART_COOLDOWN_S]
+    if recent:
+        raise Refused(f"{found.title} was restarted less than {RESTART_COOLDOWN_S // 60} minutes ago.")
+    return {"app": found.id}
+
+
+def _app(app_id: str) -> hub.App:
+    found = next((a for a in _restartable() if a.id == app_id), None)
+    if found is None:
+        raise Refused(f"{app_id} can no longer be restarted from here.")
+    return found
+
+
+def _describe_restart(a: dict) -> tuple[str, list[str]]:
+    app = _app(a["app"])
+    spec = app.restart or {}
+    lines = [f"Containers: {', '.join(spec.get('services', []))} (Docker project {spec.get('project')}).",
+             "A short outage while they come back. Its database and storage keep running."]
+    lines.append(f"Then waits up to 90 s for {app.health} to answer." if app.health
+                 else "It has no health check, so recovery isn't confirmed.")
+    return f"Restart {app.title}", lines
+
+
+async def _run_restart(a: dict, hooks: dict) -> str:
+    app = _app(a["app"])
+    url = f"{CFG.actions_executor_url}/restart"
+    headers = {"Authorization": f"Bearer {CFG.actions_executor_token}"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(RESTART_TIMEOUT_S, connect=5.0),
+                                     follow_redirects=False) as client:
+            r = await client.post(url, json={"app": app.id, "action_id": hooks.get("action_id", "")},
+                                  headers=headers)
+    except httpx.TimeoutException:
+        raise Refused("The executor took too long; check the app.") from None
+    except httpx.HTTPError:
+        raise Refused("The executor couldn't be reached.") from None
+    try:
+        body = r.json()
+    except ValueError:
+        body = {}
+    if r.status_code != 200 or not isinstance(body, dict):
+        detail = body.get("detail") if isinstance(body, dict) else None
+        raise Refused(f"The executor refused: {detail}" if isinstance(detail, str)
+                      else f"The executor answered with an error ({r.status_code}).")
+    restarted = ", ".join(str(n) for n in body.get("containers") or []) or "nothing"
+    if not body.get("ok"):
+        raise Refused(f"Restarted {restarted}, but: {body.get('problem') or 'it failed'}")
+    health = {"ok": "it answers its health check",
+              "none": "it has no health check"}.get(body.get("health"), "health unknown")
+    return f"Restarted {restarted} in {body.get('seconds', '?')} s; {health}."
+
+
 ACTIONS: dict[str, Action] = {a.name: a for a in (
     Action("run_routine", "low", _resolve_run, _describe_run, _run_run),
     Action("check_watch", "low", _resolve_check, _describe_check, _run_check),
     Action("set_routine", "low", _resolve_set, _describe_set, _run_set),
     Action("rerun_summary", "low", _resolve_rerun, _describe_rerun, _run_rerun),
+    Action("restart_app", "high", _resolve_restart, _describe_restart, _run_restart),
 )}
 
 
@@ -376,7 +450,7 @@ async def execute(action_id: str, hooks: dict | None = None) -> dict:
         if _hash(record["action"], record["args"]) != record["hash"]:
             raise Refused("It changed after it was approved.")
         action.describe(record["args"])       # the target still exists
-        result = await action.run(record["args"], hooks or {})
+        result = await action.run(record["args"], {**(hooks or {}), "action_id": action_id})
     except Refused as e:
         failed = _update(action_id, status="failed", result=str(e))
         _event("failed", failed, problem=str(e))
@@ -446,6 +520,10 @@ def buttons(record: dict) -> list[tuple[str, str]]:
     return []
 
 
+def _restart_names() -> str:
+    return ", ".join(f"“{a.title}”" for a in _restartable()) or "none"
+
+
 def tool() -> dict:
     """The model's only action tool. It lists the user's routines and watched pages."""
     routines = ", ".join(f"“{r['name']}”{'' if r['enabled'] else ' (paused)'}"
@@ -458,12 +536,14 @@ def tool() -> dict:
             "and the action happens only if they tap Approve. Use it only when the user asks "
             "for one of these: run_routine (run a routine now), check_watch (check a watched "
             "page now), set_routine (pause or resume a routine, with state), rerun_summary "
-            "(re-run Mentat's summary: target daily or weekly). "
+            "(re-run Mentat's summary: target daily or weekly), restart_app (restart one of "
+            f"these apps: {_restart_names()}; only when the user asks for a restart). "
             f"Their routines: {routines}. Their watched pages: {watches}."),
         "parameters": {"type": "object", "properties": {
             "action": {"type": "string", "enum": list(ACTIONS)},
             "target": {"type": "string", "description": (
-                "The routine or watched page's name; for rerun_summary, daily or weekly.")},
+                "The routine or watched page's name; for rerun_summary, daily or weekly; for "
+                "restart_app, the app.")},
             "state": {"type": "string", "enum": ["paused", "active"],
                       "description": "For set_routine only."},
             "reason": {"type": "string", "description": "One sentence: why, in the user's terms."},
