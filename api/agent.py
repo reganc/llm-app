@@ -130,6 +130,9 @@ class Trace:
     # (tool, lowercased query) already executed this turn — shared by the
     # deterministic pre-search and the loop, so neither repeats the other.
     seen: set[tuple[str, str]] = field(default_factory=set)
+    # Tools with their own handler (e.g. propose_action): name → handler(args) → text.
+    # They take structured arguments, not a search query.
+    handlers: dict[str, Callable[[dict], Awaitable[str]]] = field(default_factory=dict)
 
     def renumber(self, block: str) -> str:
         """Shift every marker in `block` past those already issued, then
@@ -247,6 +250,8 @@ async def execute(call: dict, trace: Trace, *, allowed: set[str], store: bool) -
     """Run one tool call; always returns a `tool` message for the model."""
     fn = (call or {}).get("function") or {}
     name = fn.get("name") or ""
+    if name in allowed and name in trace.handlers:
+        return await _handled(name, _parse_args(fn.get("arguments")), trace)
     query, error = _validate(name, _parse_args(fn.get("arguments")), allowed)
     if error:
         trace.calls.append({"name": name, "query": None, "status": "invalid"})
@@ -269,6 +274,21 @@ async def execute(call: dict, trace: Trace, *, allowed: set[str], store: bool) -
             content, status = f"Error: {name} failed ({type(e).__name__}).", "error"
         trace.calls.append({"name": name, "query": query, "status": status})
     return {"role": "tool", "tool_name": name or "unknown", "content": content}
+
+
+async def _handled(name: str, args: dict | None, trace: Trace) -> dict:
+    """A tool with its own handler. Its text goes back to the model; errors are contained."""
+    if args is None:
+        content, status = "Error: the arguments must be a JSON object.", "invalid"
+    else:
+        try:
+            content = await trace.handlers[name](args)
+            status = "refused" if content.startswith("Error") else "ok"
+        except Exception as e:
+            log.warning("tool %s failed: %s", name, type(e).__name__)
+            content, status = f"Error: {name} failed ({type(e).__name__}).", "error"
+    trace.calls.append({"name": name, "query": None, "status": status})
+    return {"role": "tool", "tool_name": name, "content": content}
 
 
 async def prefetch_web(query: str, trace: Trace, *, store: bool) -> str | None:

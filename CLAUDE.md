@@ -59,6 +59,9 @@ llm-app/
 │   ├── hub.py                  # status cards from the other apps (~/apps/fleet.yaml, HUB.md)
 │   ├── hub_adapters.py         # turns apps' existing status endpoints into cards
 │   ├── ask_apps.py             # /mentat …, /nexus …: ask another app, relay its answer
+│   ├── actions.py              # action gate: the model proposes, the user approves, code acts
+│   ├── action_cards.py         # approval cards and button taps in Telegram
+│   ├── action_log.py           # hash-chained log of every proposal and outcome
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -167,6 +170,7 @@ Coverage:
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
+| `test_actions.py` · `test_action_cards.py` | the gate: targets, limits, expiry, one use per approval, second tap for high risk, re-check before running, log chain; the model only gets a card sent, only the user's tap on that card runs it |
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
@@ -294,6 +298,17 @@ its answer with its sources or confidence. No model here. Only apps whose fleet.
 `ask:` and privacy `home`, at their `summary.base` (host.docker.internal only, no redirects, 1 MB,
 300 s). A separate queue, so a slow answer never holds up chat. Asking records the question in
 that app's own history and may use its paid model within that app's budget; nothing else changes.
+
+**Action gate** (`api/actions.py`, `action_cards.py`, `action_log.py`; design in
+`docs/action-gate.md`): in Telegram the model's one way to act is `propose_action`, which
+sends a card written by code from the stored arguments, with Approve/Reject. Only a tap from
+the chosen person, in their private chat, on that card, with its one-time nonce, moves it on;
+high-risk actions need a second tap. Proposals expire after 15 min; at most 3 waiting and 10
+an hour; everything is checked again just before running. On the list: run a routine, check
+a watched page, pause/resume a routine (adding one means code and a test). Never: private
+apps, deleting, settings, secrets, messages, money. Routines and the briefing never get the
+tool. Every step goes to `DATA_DIR/actions/audit.jsonl` (hash-chained, no message text).
+Typed `/run`, `/pause`, `/resume` still act directly: the user wrote them.
 
 **Images** (`api/images.py`): OpenAI-style `image_url` parts on `/v1/chat/completions`
 (the latest user message's images go on the latest question), `images` on conversation
