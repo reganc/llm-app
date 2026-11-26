@@ -18,3 +18,4 @@ pgvector==0.3.6
 tzdata>=2024.1
 # Site crawling — JS-aware via embedded Playwright/Chromium
 crawl4ai==0.8.6
+PyYAML==6.0.3
