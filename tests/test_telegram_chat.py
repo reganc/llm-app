@@ -93,8 +93,10 @@ def msg(text="hi", **kw):
 def say(env, *updates):
     """Handle updates and answer everything queued."""
     async def go():
-        workers = [asyncio.create_task(tc._work()), asyncio.create_task(tc._app_work())]
+        workers = [asyncio.create_task(tc._work()), asyncio.create_task(tc._app_work()),
+                   asyncio.create_task(tc._voice_work())]
         await tc.handle(list(updates))
+        await asyncio.wait_for(tc._voice_queue.join(), 5)    # a voice note may then queue a question
         await asyncio.wait_for(tc._queue.join(), 5)
         await asyncio.wait_for(tc._app_queue.join(), 5)
         while rr._tasks or action_cards._tasks:
@@ -105,6 +107,7 @@ def say(env, *updates):
     n = len(env.sent)
     tc._queue = asyncio.Queue(maxsize=tc._QUEUE)  # queues bind to an event loop
     tc._app_queue = asyncio.Queue(maxsize=tc._QUEUE)
+    tc._voice_queue = asyncio.Queue(maxsize=tc._QUEUE)
     run(go())
     return env.sent[n:]
 
@@ -540,7 +543,7 @@ def test_image_files_count_and_other_files_do_not(env, files):
     m = msg()
     m["message"].pop("text")
     m["message"]["document"] = {"file_id": "doc2", "mime_type": "application/pdf"}
-    assert say(env, m) == ["I can only read text messages and photos."] and files == ["doc1"]
+    assert say(env, m) == ["I can only read text messages, photos and voice notes."] and files == ["doc1"]
 
 
 @pytest.mark.parametrize("file_id,word", [("bad", "could not be read"), ("big", "too large")])

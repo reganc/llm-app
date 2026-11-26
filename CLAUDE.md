@@ -56,6 +56,7 @@ llm-app/
 │   ├── watch_check.py          # reads and compares watched pages (no model)
 │   ├── watch_store.py          # watches (JSON files)
 │   ├── images.py               # attached images: checked, shrunk, metadata dropped
+│   ├── voice.py                # Telegram voice notes → text (local faster-whisper, CPU)
 │   ├── briefing.py             # morning briefing (no model)
 │   ├── calendar_feed.py        # today's events from a private iCal address
 │   ├── hub.py                  # status cards from the other apps (~/apps/fleet.yaml, HUB.md)
@@ -182,6 +183,7 @@ Coverage:
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
+| `test_voice.py` | voice notes: shown back then answered, spoken commands stay questions, refusals, length limit, failures and transcripts never logged, one at a time |
 | `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
@@ -349,6 +351,14 @@ for something not in the picture it usually invented one (1/7 refused) until
 both for "What's the total?" and took 15-20 s instead of 1-4 s. Thinking
 mode was tried and dropped (minutes, empty answers). Reasoning mode refuses images.
 
+**Voice notes** (`api/voice.py`): a Telegram voice note is downloaded, transcribed on this
+machine (faster-whisper, CPU int8, so the GPU stays with Ollama), shown back as "Heard: “…”",
+then answered exactly like a typed question: the `_ASKS` refusal applies and it never runs a
+command (commands only count when typed). Its own queue, one transcription at a time; notes over
+5 minutes refused before download; transcripts never logged. Default `large-v3-turbo` (an 8.9 s
+clip in 5 s on the i5-14600K, every word right; `small.en` 1.5 s but misheard "Mentat"), loaded
+on the first note and cached in `DATA_DIR/whisper`.
+
 **Skills** (`api/skills.py`): `/name …` in chat or Telegram, or a routine's `skill`.
 Text added to the system prompt, nothing else; a skill in use can't be deleted.
 
@@ -448,6 +458,7 @@ flag False and are unchanged.
 | `HOMELAB_TRIAGE_VAR` | `../homelab-triage/var` | Host folder with the triage digest, mounted read-only for the briefing |
 | `FLEET_FILE` · `HUB_DIR` | `../fleet.yaml` · `../.hub` | The app hub's list and the folder private apps write cards to (both read-only) |
 | `ACTIONS_EXECUTOR_TOKEN` | empty | Secret shared by llm-api and the executor. Empty = restarts off |
+| `VOICE_ENABLED` · `WHISPER_MODEL` · `WHISPER_THREADS` | `true` · `large-v3-turbo` · `8` | Telegram voice notes; `small.en` is ~3× faster, less accurate |
 | `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |

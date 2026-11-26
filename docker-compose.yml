@@ -162,6 +162,10 @@ services:
       - GOOGLE_CALENDAR_ICS_URL=${GOOGLE_CALENDAR_ICS_URL:-}
       # Optional: Telegram notifications for routines (choose the chat in Settings)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      # Telegram voice notes → text, local faster-whisper on the CPU (voice.py)
+      - VOICE_ENABLED=${VOICE_ENABLED:-true}
+      - WHISPER_MODEL=${WHISPER_MODEL:-large-v3-turbo}
+      - WHISPER_THREADS=${WHISPER_THREADS:-8}
       # Secret shared with the executor (approved restarts); empty = restarts off
       - ACTIONS_EXECUTOR_TOKEN=${ACTIONS_EXECUTOR_TOKEN:-}
       - ACTIONS_EXECUTOR_URL=http://executor:8000

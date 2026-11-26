@@ -19,3 +19,5 @@ tzdata>=2024.1
 # Site crawling — JS-aware via embedded Playwright/Chromium
 crawl4ai==0.8.6
 PyYAML==6.0.3
+# Telegram voice notes (voice.py): CPU int8; pulls av (Opus decode), ctranslate2, onnxruntime (VAD)
+faster-whisper==1.2.1
