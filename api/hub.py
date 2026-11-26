@@ -63,6 +63,7 @@ class App:
     ui: str | None = None
     health: str | None = None
     summary: dict[str, str] = field(default_factory=dict)
+    ask: str | None = None          # how to ask it questions (ask_apps.py); home apps only
 
 
 @dataclass
@@ -112,8 +113,9 @@ def load_fleet(path: Path | None = None) -> list[App]:
         if "base" in summary and not _safe_url(summary["base"]):
             summary.pop("base")
         ui = entry.get("ui") if isinstance(entry.get("ui"), str) and entry["ui"].startswith("http") else None
+        ask = entry.get("ask") if privacy == "home" and isinstance(entry.get("ask"), str) else None
         apps.append(App(id=entry["id"], title=str(entry.get("title") or entry["id"])[:40], privacy=privacy,
-                        ui=ui, health=_safe_url(entry.get("health")), summary=summary))
+                        ui=ui, health=_safe_url(entry.get("health")), summary=summary, ask=ask))
     return apps
 
 

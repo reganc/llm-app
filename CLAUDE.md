@@ -58,6 +58,7 @@ llm-app/
 │   ├── calendar_feed.py        # today's events from a private iCal address
 │   ├── hub.py                  # status cards from the other apps (~/apps/fleet.yaml, HUB.md)
 │   ├── hub_adapters.py         # turns apps' existing status endpoints into cards
+│   ├── ask_apps.py             # /mentat …, /nexus …: ask another app, relay its answer
 │   ├── safe_fetch.py           # fetch limited to public addresses on an approved site
 │   ├── extract.py              # URL/PDF/DOCX/YouTube text extraction
 │   ├── conversations.py        # persistent conversation store
@@ -165,6 +166,7 @@ Coverage:
 | `test_telegram_chat.py` · `test_skills.py` · `test_skill_use.py` | who Telegram answers, commands, what may leave the machine; skills storage and use |
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
+| `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
 | `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
@@ -282,6 +284,13 @@ fleet.yaml on `host.docker.internal` are fetched, without redirects, 2 MB and 4 
 Every title passes its app's privacy rule (`allowed`): never a money amount, and for
 `private` apps no number over 2 digits except a date; anything else is dropped and
 counted as withheld. This bot is internet-facing, so a private app's figures never reach it.
+
+**Asking other apps** (`api/ask_apps.py`): `/mentat …` and `/nexus …` in Telegram send the
+question to that app's own ask endpoint (mentat `POST /ask`, nexus `POST /api/ask`) and relay
+its answer with its sources or confidence. No model here. Only apps whose fleet.yaml entry has
+`ask:` and privacy `home`, at their `summary.base` (host.docker.internal only, no redirects, 1 MB,
+300 s). A separate queue, so a slow answer never holds up chat. Asking records the question in
+that app's own history and may use its paid model within that app's budget; nothing else changes.
 
 **Images** (`api/images.py`): OpenAI-style `image_url` parts on `/v1/chat/completions`
 (the latest user message's images go on the latest question), `images` on conversation
