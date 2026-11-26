@@ -189,6 +189,7 @@ Coverage:
 | `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
 | `test_eval_scoring.py` | `evals/scoring.py` — citation validity, routing/content checks, summary + compare |
+| `test_replay.py` | `evals/replay.py` model replay — which real questions with what history, flaws vs neutral differences, regressions first, results 0600 |
 | `test_reasoning_endpoint.py` | `/v1/chat/reasoning`, JSON **and** SSE — budget floor, `think:true`, timeout, search-off default, memory write guards, auth |
 
 All are offline: Ollama, search and memory are stubbed, and the endpoint
@@ -373,7 +374,9 @@ Text added to the system prompt, nothing else; a skill in use can't be deleted.
 
 **Evals** (`evals/`, see its README): 29 golden cases scored against the live
 stack — `python evals/run.py [--mode stream] [--compare <results.json>]`.
-Requests send `store:false` so evals never write memory.
+Requests send `store:false` so evals never write memory. Before a model swap,
+`python evals/replay.py --candidate <tag>` replays your newest real questions (SPA and Telegram)
+through both models and lists regressions first; answers stay in `evals/results/` (0600).
 
 Note the layering: the endpoint tests stub `oll.stream_chat`, so they pin that
 the SSE wrapper *forwards* reasoning deltas and closes the stream correctly.
