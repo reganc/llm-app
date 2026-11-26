@@ -92,15 +92,18 @@ def msg(text="hi", **kw):
 def say(env, *updates):
     """Handle updates and answer everything queued."""
     async def go():
-        worker = asyncio.create_task(tc._work())
+        workers = [asyncio.create_task(tc._work()), asyncio.create_task(tc._app_work())]
         await tc.handle(list(updates))
         await asyncio.wait_for(tc._queue.join(), 5)
+        await asyncio.wait_for(tc._app_queue.join(), 5)
         while rr._tasks:
             await asyncio.sleep(0.005)
-        worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        for w in workers:
+            w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
     n = len(env.sent)
     tc._queue = asyncio.Queue(maxsize=tc._QUEUE)  # queues bind to an event loop
+    tc._app_queue = asyncio.Queue(maxsize=tc._QUEUE)
     run(go())
     return env.sent[n:]
 
@@ -581,3 +584,36 @@ def test_apps_command_lists_the_hub(env, monkeypatch):
         raise RuntimeError("boom")
     monkeypatch.setattr(hub, "gather", broken)
     assert say(env, msg("/apps")) == ["The apps couldn't be checked just now."]
+
+
+def test_asking_another_app(env, monkeypatch):
+    import ask_apps
+    import hub
+    mentat = hub.App(id="mentat", title="Mentat", privacy="home", ask="mentat",
+                     summary={"base": "http://host.docker.internal:8400"})
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [mentat])
+    asked = []
+
+    async def fake_ask(app, question, client=None):
+        asked.append((app.id, question))
+        return "Mentat:\n\nIt's quiet."
+    monkeypatch.setattr(ask_apps, "ask", fake_ask)
+    assert say(env, msg("/mentat what changed today?")) == [
+        "Asking Mentat. It can take a few minutes.", "Mentat:\n\nIt's quiet."]
+    assert asked == [("mentat", "what changed today?")]
+    assert say(env, msg("/mentat")) == ["Ask it something, like: /mentat what changed today?"]
+    assert say(env, msg("/nexus hello")) == ["I don't know that command. Send /help for the list."]
+    assert env.payloads == []  # the bot's own model was never used
+    assert "/mentat" in tc.HELP
+
+
+def test_a_forwarded_app_command_is_not_run(env, monkeypatch):
+    import ask_apps
+    import hub
+    monkeypatch.setattr(hub, "load_fleet", lambda *a: [hub.App(
+        id="nexus", title="Nexus", privacy="home", ask="nexus", summary={"base": "http://host.docker.internal:9000"})])
+
+    async def never(*a, **k):
+        raise AssertionError("asked")
+    monkeypatch.setattr(ask_apps, "ask", never)
+    say(env, msg("/nexus anything", forward_origin={"type": "user"}))

@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from collections import deque
 
 import agent
+import ask_apps
 import chat
 import hub
 import images
@@ -84,6 +85,7 @@ HELP = (
     "/watches: pages being watched\n"
     "/skills: your saved skills\n"
     "/apps: how your other apps are doing\n"
+    "/mentat …, /nexus …: ask that app (its answer, its sources)\n"
     "/search …: always search the web\n"
     "/new: forget this conversation\n"
     "Send a photo, with a question as its caption, to ask about it.\n"
@@ -92,14 +94,15 @@ HELP = (
 _MORE = {"more", "full", "details", "/more", "sources"}
 
 _queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)
+_app_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)  # other apps answer slowly; never block chat
 _history: deque[tuple[str, str]] = deque(maxlen=_HISTORY)
 _last_turn = 0.0
 
 
 def reset() -> None:
     """Test hook: queues bind to an event loop."""
-    global _queue, _last_turn
-    _queue, _last_turn = asyncio.Queue(maxsize=_QUEUE), 0.0
+    global _queue, _app_queue, _last_turn
+    _queue, _app_queue, _last_turn = asyncio.Queue(maxsize=_QUEUE), asyncio.Queue(maxsize=_QUEUE), 0.0
     _history.clear()
 
 
@@ -365,6 +368,36 @@ async def _work() -> None:
         await _say_long(reply)
 
 
+async def _app_work() -> None:
+    """Questions for other apps, one at a time, separate from chat."""
+    while True:
+        app, question = await _app_queue.get()
+        typing = asyncio.create_task(_typing())
+        try:
+            reply = await ask_apps.ask(app, question)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("ask %s failed: %s", app.id, type(e).__name__)
+            reply = f"Something went wrong asking {app.title}."
+        finally:
+            typing.cancel()
+            _app_queue.task_done()
+        await _say_long(reply)
+
+
+async def _ask_app(app: hub.App, question: str) -> None:
+    if not question:
+        await _say(f"Ask it something, like: /{app.id} what changed today?")
+        return
+    try:
+        _app_queue.put_nowait((app, question))
+    except asyncio.QueueFull:
+        await _say("I'm still waiting on your earlier questions to other apps.")
+        return
+    await _say(f"Asking {app.title}. It can take a few minutes.")
+
+
 async def _ask(question: str, **kwargs) -> None:
     try:
         _queue.put_nowait({"question": question, **kwargs})
@@ -415,6 +448,8 @@ async def _command(name: str, arg: str) -> bool:
         await _say("Started a new conversation.")
     elif name == "search" and arg:
         await _ask(arg, force_search=True)
+    elif app := ask_apps.askable().get(name):
+        await _ask_app(app, arg)
     else:
         return False
     return True
@@ -517,6 +552,7 @@ async def poll_once() -> None:
 
 async def loop() -> None:
     worker, failures = asyncio.create_task(_work()), 0
+    app_worker = asyncio.create_task(_app_work())
     try:
         while True:
             if not active():
@@ -534,4 +570,5 @@ async def loop() -> None:
                 await asyncio.sleep(min(5.0 * 2 ** min(failures - 1, 4), _MAX_BACKOFF_S))
     finally:
         worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        app_worker.cancel()
+        await asyncio.gather(worker, app_worker, return_exceptions=True)
