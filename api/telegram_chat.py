@@ -18,13 +18,13 @@ import re
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from collections import deque
 
 import action_cards
 import actions
 import agent
 import ask_apps
 import chat
+import chat_memory
 import hub
 import images
 import notify
@@ -48,7 +48,6 @@ _MAX_BACKOFF_S = 60.0
 _STALE_S = 900          # a message that waited longer (server off) is not acted on
 _ANSWER_TIMEOUT_S = 180.0
 _MAX_TOKENS = 1024
-_HISTORY, _HISTORY_TTL_S, _HISTORY_CHARS = 3, 7200, 500
 _QUEUE = 3
 _MAX_TEXT = 4000
 _PART_CHARS, _MAX_PARTS = 3500, 3
@@ -112,16 +111,14 @@ _MORE = {"more", "full", "details", "/more", "sources"}
 _queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)
 _app_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)  # other apps answer slowly; never block chat
 _voice_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)  # transcription takes seconds; never block chat
-_history: deque[tuple[str, str]] = deque(maxlen=_HISTORY)
-_last_turn = 0.0
 
 
 def reset() -> None:
     """Test hook: queues bind to an event loop."""
-    global _queue, _app_queue, _voice_queue, _last_turn
-    _queue, _app_queue, _last_turn = asyncio.Queue(maxsize=_QUEUE), asyncio.Queue(maxsize=_QUEUE), 0.0
+    global _queue, _app_queue, _voice_queue
+    _queue, _app_queue = asyncio.Queue(maxsize=_QUEUE), asyncio.Queue(maxsize=_QUEUE)
     _voice_queue = asyncio.Queue(maxsize=_QUEUE)
-    _history.clear()
+    chat_memory.forget()
 
 
 class _QuietPolling(logging.Filter):
@@ -146,7 +143,7 @@ def library_allowed() -> bool:
 
 
 def forget() -> None:
-    _history.clear()
+    chat_memory.forget()
 
 
 # ── sending ──────────────────────────────────────────────────────────────────
@@ -300,16 +297,11 @@ async def _set_enabled(arg: str, enabled: bool) -> None:
 # ── questions ────────────────────────────────────────────────────────────────
 
 def _remember(question: str, answer: str) -> None:
-    global _last_turn
-    _history.append((question[:_HISTORY_CHARS], agent.strip_markers(answer)[:_HISTORY_CHARS]))
-    _last_turn = time.monotonic()
+    chat_memory.remember(get_setting(notify.CHAT_SETTING), question, agent.strip_markers(answer))
 
 
 def _turns() -> list[dict]:
-    if _history and time.monotonic() - _last_turn > _HISTORY_TTL_S:
-        _history.clear()
-    return [m for q, a in _history for m in ({"role": "user", "content": q},
-                                             {"role": "assistant", "content": a})]
+    return chat_memory.turns(get_setting(notify.CHAT_SETTING))
 
 
 def _about(routine: dict, run: dict) -> str | None:
