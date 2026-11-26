@@ -76,6 +76,9 @@ class Config:
     telegram_bot_token: str
     actions_executor_url: str
     actions_executor_token: str
+    voice_enabled: bool
+    whisper_model: str
+    whisper_threads: int
 
 
 def _csv(name: str, default: str) -> list[str]:
@@ -150,6 +153,10 @@ CFG = Config(
     # the token is a secret shared with the executor. Empty = restarts off.
     actions_executor_url=os.getenv("ACTIONS_EXECUTOR_URL", "http://executor:8000").rstrip("/"),
     actions_executor_token=os.getenv("ACTIONS_EXECUTOR_TOKEN", "").strip(),
+    # Telegram voice notes → text (voice.py): local faster-whisper on the CPU.
+    voice_enabled=os.getenv("VOICE_ENABLED", "true").lower() == "true",
+    whisper_model=os.getenv("WHISPER_MODEL", "large-v3-turbo").strip() or "large-v3-turbo",
+    whisper_threads=int(os.getenv("WHISPER_THREADS", "8")),
 )
 
 # ── Mutable runtime settings (persisted to disk) ─────────────────────────────

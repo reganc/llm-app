@@ -5,7 +5,9 @@ Commands are read by code from the user's own typed messages (never from
 forwarded ones), and the only things they can do are list, run, pause and
 resume routines. Questions go through the read-only agent loop with
 `store=False`; its one way to act is `propose_action`, which only sends the
-user an approval card (actions.py, action_cards.py). The saved library is left out unless the user allows it, because
+user an approval card (actions.py, action_cards.py). Voice notes are
+transcribed locally (voice.py) and answered like a typed question; they never
+run a command. The saved library is left out unless the user allows it, because
 answers leave this machine. Message text is never logged.
 """
 from __future__ import annotations
@@ -32,6 +34,7 @@ import routine_runner as runner
 import routine_store as store
 import search
 import skills
+import voice
 import watch_store
 from config import CFG, get_active_model, get_search_always, get_setting, set_setting
 from prompts import build_system, search_block_prompt
@@ -100,20 +103,23 @@ HELP = (
     "you get a card to approve first.\n"
     "/new: forget this conversation\n"
     "Send a photo, with a question as its caption, to ask about it.\n"
+    "Send a voice note to ask out loud (transcribed on this computer).\n"
     "Reply to a notification to ask about it, or reply “more” for all of it."
 )
 _MORE = {"more", "full", "details", "/more", "sources"}
 
 _queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)
 _app_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)  # other apps answer slowly; never block chat
+_voice_queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE)  # transcription takes seconds; never block chat
 _history: deque[tuple[str, str]] = deque(maxlen=_HISTORY)
 _last_turn = 0.0
 
 
 def reset() -> None:
     """Test hook: queues bind to an event loop."""
-    global _queue, _app_queue, _last_turn
+    global _queue, _app_queue, _voice_queue, _last_turn
     _queue, _app_queue, _last_turn = asyncio.Queue(maxsize=_QUEUE), asyncio.Queue(maxsize=_QUEUE), 0.0
+    _voice_queue = asyncio.Queue(maxsize=_QUEUE)
     _history.clear()
 
 
@@ -419,6 +425,45 @@ async def _app_work() -> None:
         await _say_long(reply)
 
 
+async def _voice_work() -> None:
+    """Voice notes, one at a time: download, transcribe, show what was heard, then ask."""
+    while True:
+        file_id, context = await _voice_queue.get()
+        typing = asyncio.create_task(_typing())
+        try:
+            text = (await voice.transcribe(await notify.download(file_id)))[:_MAX_TEXT]
+        except asyncio.CancelledError:
+            raise
+        except (notify.NotifyError, voice.VoiceError) as e:
+            text = None
+            await _say(str(e))
+        except Exception as e:           # never the transcript: it is message text
+            text = None
+            log.warning("voice note failed: %s", type(e).__name__)
+            await _say("Something went wrong with that voice note.")
+        finally:
+            typing.cancel()
+            _voice_queue.task_done()
+        if not text:
+            continue
+        await _say(f"Heard: “{text}”")
+        if _ASKS.search(text):
+            await _say(_REFUSE)
+            continue
+        await _ask(text, context=context)
+
+
+async def _voice(message: dict, context: str | None) -> None:
+    note = message.get("voice") or {}
+    if (note.get("duration") or 0) > voice.MAX_SECONDS:
+        await _say(f"That voice note is too long; keep it under {voice.MAX_SECONDS // 60} minutes.")
+        return
+    try:
+        _voice_queue.put_nowait((note["file_id"], context))
+    except asyncio.QueueFull:
+        await _say("I'm still listening to your earlier voice notes.")
+
+
 async def _ask_app(app: hub.App, question: str) -> None:
     if not question:
         await _say(f"Ask it something, like: /{app.id} what changed today?")
@@ -511,6 +556,14 @@ async def _photo(message: dict, caption: str) -> None:
 
 
 async def _handle(message: dict) -> None:
+    if isinstance(message.get("voice"), dict) and message["voice"].get("file_id"):
+        target = _by_message((message.get("reply_to_message") or {}).get("message_id"))
+        context = _about(*target) if target else None
+        if target and context is None:
+            await _say("That result isn't available here. Open llm-app to read it.")
+            return
+        await _voice(message, context)
+        return
     caption = (message.get("caption") or "").strip()[:_MAX_TEXT]
     if _picture_id(message):
         if _ASKS.search(caption):
@@ -520,7 +573,7 @@ async def _handle(message: dict) -> None:
         return
     text = (message.get("text") or "").strip()[:_MAX_TEXT]
     if not text:
-        await _say("I can only read text messages and photos.")
+        await _say("I can only read text messages, photos and voice notes.")
         return
     forwarded = bool(message.get("forward_origin") or message.get("forward_date"))
     target = _by_message((message.get("reply_to_message") or {}).get("message_id"))
@@ -595,6 +648,7 @@ async def poll_once() -> None:
 async def loop() -> None:
     worker, failures = asyncio.create_task(_work()), 0
     app_worker = asyncio.create_task(_app_work())
+    voice_worker = asyncio.create_task(_voice_work())
     try:
         while True:
             if not active():
@@ -613,4 +667,5 @@ async def loop() -> None:
     finally:
         worker.cancel()
         app_worker.cancel()
-        await asyncio.gather(worker, app_worker, return_exceptions=True)
+        voice_worker.cancel()
+        await asyncio.gather(worker, app_worker, voice_worker, return_exceptions=True)
