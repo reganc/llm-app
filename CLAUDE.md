@@ -3,7 +3,7 @@ Codex will review your output once you are done
 
 Local AI stack running on an RTX 3060 (12 GB VRAM). Provides a fully offline LLM inference pipeline with RAG, web search, persistent memory, and an OpenAI-compatible API.
 
-## Services (4 containers)
+## Services (5 containers)
 
 | Service | Container | Port | Purpose |
 |---------|-----------|------|---------|
@@ -11,6 +11,7 @@ Local AI stack running on an RTX 3060 (12 GB VRAM). Provides a fully offline LLM
 | SearXNG | `searxng` | 8025 | Private self-hosted web search |
 | Postgres+pgvector | `llm-db` | 5433 | RAG metadata + vector store |
 | API + UI | `llm-api` | 8030 | FastAPI REST + RAG + brand-new SPA at `/` |
+| Executor | `llm-executor` | none | approved restarts only (`executor/main.py`); the one service with the Docker socket |
 
 The API uses Postgres+pgvector (HNSW cosine index) for the RAG store and
 pulls models on startup. Open WebUI was removed — the SPA is the only UI.
@@ -28,7 +29,8 @@ pulls models on startup. Open WebUI was removed — the SPA is the only UI.
 
 ```
 llm-app/
-├── docker-compose.yml          # 3 services
+├── docker-compose.yml          # 5 services
+├── executor/                   # approved restarts: main.py, Dockerfile (code baked in, no bind mount)
 ├── api/
 │   ├── Dockerfile
 │   ├── requirements.txt
@@ -171,6 +173,7 @@ Coverage:
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
 | `test_actions.py` · `test_action_cards.py` | the gate: targets, limits, expiry, one use per approval, second tap for high risk, re-check before running, log chain; the model only gets a card sent, only the user's tap on that card runs it |
+| `test_executor.py` | the executor: token, only listed home apps, label match, order, cooldown and daily cap from its log, health, log chain (fake Docker) |
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
 | `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
@@ -308,7 +311,12 @@ an hour; everything is checked again just before running, in the background so t
 working. On the list: run a routine, check a watched page, pause/resume a routine, re-run
 Mentat's daily or weekly summary (`POST /summaries/{kind}?replace=true` at fleet.yaml's
 `summary.base`, no redirects, 1 MB, 600 s; a headline comes back only if it passes the
-privacy rule). Adding one means code and a test. Never: private
+privacy rule), restart an app (high risk, second tap). Restarts go to the executor
+(`http://executor:8000`, no published port, `ACTIONS_EXECUTOR_TOKEN`): it restarts only an
+app whose fleet.yaml entry is `home` with `restart: {project, services}` (read-only mount),
+finds containers by compose label, one at a time, once per app per 10 min, 6 a day, waits
+90 s for `health`, and logs to its own hash-chained `restarts.jsonl`. llm-api has no Docker
+access. Adding an action means code and a test. Never: private
 apps, deleting, settings, secrets, messages, money. Routines and the briefing never get the
 tool. Every step goes to `DATA_DIR/actions/audit.jsonl` (hash-chained, no message text).
 Typed `/run`, `/pause`, `/resume` still act directly: the user wrote them.
@@ -420,6 +428,7 @@ flag False and are unchanged.
 | `GOOGLE_CALENDAR_ICS_URL` | empty | Secret. Google Calendar's "Secret address in iCal format", for the morning briefing |
 | `HOMELAB_TRIAGE_VAR` | `../homelab-triage/var` | Host folder with the triage digest, mounted read-only for the briefing |
 | `FLEET_FILE` · `HUB_DIR` | `../fleet.yaml` · `../.hub` | The app hub's list and the folder private apps write cards to (both read-only) |
+| `ACTIONS_EXECUTOR_TOKEN` | empty | Secret shared by llm-api and the executor. Empty = restarts off |
 | `TELEGRAM_BOT_TOKEN` | empty | Secret. Telegram notifications for routines; the chat is chosen in Settings |
 | `ROUTINE_TIMEZONE` | `America/Chicago` | Default timezone for new routines |
 | `X_SEARCH_ENABLED` | `false` | Enable X/Twitter via x-cli. The login expires: `/v1/search/x/status` shows `auth_ok:false`; fix with `x-cli auth login` on the host (no restart needed) |

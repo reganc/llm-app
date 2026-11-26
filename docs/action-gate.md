@@ -1,8 +1,8 @@
 # Action gate: the bot proposes, you approve, code acts
 
-Status: steps 1–2 built (2026-11-26): the gate, its log, Telegram cards, the three
-llm-app actions, and `rerun_summary` (with Mentat's `?replace=true`). Steps 3–5 not
-started.
+Status: steps 1–3 built (2026-11-26): the gate, its log, Telegram cards, the three
+llm-app actions, `rerun_summary` (with Mentat's `?replace=true`), and `restart_app`
+through the executor. Steps 4–5 not started.
 
 Decided: restarts for mentat, nexus, delphi and trading (not llm-app or Ollama);
 high risk keeps the second tap; MCP proposals allowed when step 4 lands.
@@ -110,8 +110,9 @@ llm-app faces the internet and stays without Docker access (the Docker socket
 is root on this machine). Restarts go through a small new service, the
 **executor**:
 
-- One file, no model, runs in a container with the Docker socket, ports bound
-  to `127.0.0.1` and `172.17.0.1` only (the port lockdown pattern).
+- One file, no model, runs in a container with the Docker socket and no
+  published port: only llm-api reaches it, as `http://executor:8000` on
+  llm-app's own network. Read-only root filesystem, all capabilities dropped.
 - One endpoint: `POST /restart {app, action_id}` with a bearer token
   (`ACTIONS_EXECUTOR_TOKEN`, in both .env files).
 - It reads fleet.yaml itself (read-only mount) and acts only on an app's

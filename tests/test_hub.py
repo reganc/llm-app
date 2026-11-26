@@ -37,6 +37,18 @@ apps:
     assert apps[2].health is None and "base" not in apps[2].summary  # only host.docker.internal is fetched
 
 
+def test_restart_entries_only_for_home_apps_with_safe_names(tmp_path):
+    apps = {a.id: a for a in _fleet(tmp_path, """
+apps:
+  - {id: mentat, privacy: home, restart: {project: mentat, services: [api, worker, api]}}
+  - {id: tax, privacy: private, restart: {project: tax, services: [app]}}
+  - {id: odd, privacy: home, restart: {project: "a b", services: [api]}}
+  - {id: none, privacy: home, restart: {project: x, services: []}}
+""")}
+    assert apps["mentat"].restart == {"project": "mentat", "services": ["api", "worker"]}
+    assert apps["tax"].restart is None and apps["odd"].restart is None and apps["none"].restart is None
+
+
 def test_unreadable_fleet_is_empty(tmp_path):
     assert hub.load_fleet(tmp_path / "missing.yaml") == []
     assert _fleet(tmp_path, "apps: [") == []
