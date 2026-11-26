@@ -20,6 +20,7 @@ the hourly limit can count them); every step goes to action_log.
 from __future__ import annotations
 
 import copy
+import re
 import hashlib
 import json
 import logging
@@ -51,7 +52,8 @@ MAX_PER_HOUR = 10
 KEEP_S = 7 * 24 * 3600
 _REASON_CHARS = 300
 OPEN = ("pending", "confirming")      # waiting on the user
-_SOURCES = {"telegram": "Telegram chat"}
+_SOURCES = {"telegram": "Telegram chat", "mcp": "MCP client"}
+_CLIENT = re.compile(r"[^A-Za-z0-9 ._-]")
 
 
 class Refused(Exception):
@@ -372,7 +374,8 @@ def _event(kind: str, record: dict, **extra) -> None:
 
 # ── propose / decide / execute ───────────────────────────────────────────────
 
-def propose(action: str, args: dict, *, reason: str, source: str, after_reading: bool) -> dict:
+def propose(action: str, args: dict, *, reason: str, source: str, after_reading: bool,
+            client: str = "") -> dict:
     """A stored proposal waiting for the user, or Refused (text for the model)."""
     found = ACTIONS.get(action)
     if found is None:
@@ -391,7 +394,8 @@ def propose(action: str, args: dict, *, reason: str, source: str, after_reading:
         raise Refused(f"No more than {MAX_PER_HOUR} proposals an hour.")
     record = {"id": uuid.uuid4().hex[:12], "action": action, "args": stored, "hash": digest,
               "risk": found.risk, "reason": " ".join(str(reason or "").split())[:_REASON_CHARS],
-              "source": source, "after_reading": bool(after_reading), "status": "pending",
+              "source": source, "client": _CLIENT.sub("", str(client))[:40].strip(),
+              "after_reading": bool(after_reading), "status": "pending",
               "nonce": uuid.uuid4().hex[:8], "created_at": now, "expires_at": now + TTL_S,
               "message_id": None, "result": None}
     _records[record["id"]] = record
@@ -501,6 +505,9 @@ def card_text(record: dict) -> str:
         lines += ["", record["result"]]
     if status in OPEN:
         source = _SOURCES.get(record["source"], record["source"])
+        if record["source"] == "mcp":
+            source = (f"MCP client “{record.get('client') or 'unnamed'}” "
+                      "(what it read before is unknown)")
         lines += ["", f"Why (the model's words): “{record['reason'] or 'no reason given'}”",
                   f"Proposed from: {source}"
                   + (", after reading web pages or your library" if record["after_reading"] else ""),

@@ -1,8 +1,8 @@
 # Action gate: the bot proposes, you approve, code acts
 
-Status: steps 1–3 built (2026-11-26): the gate, its log, Telegram cards, the three
-llm-app actions, `rerun_summary` (with Mentat's `?replace=true`), and `restart_app`
-through the executor. Steps 4–5 not started.
+Status: steps 1–4 built (2026-11-26): the gate, its log, Telegram cards, the three
+llm-app actions, `rerun_summary` (with Mentat's `?replace=true`), `restart_app`
+through the executor, and the MCP endpoint. Step 5 (SPA panel) not started.
 
 Decided: restarts for mentat, nexus, delphi and trading (not llm-app or Ollama);
 high risk keeps the second tap; MCP proposals allowed when step 4 lands.
@@ -145,9 +145,12 @@ with four tools:
 - `action_status` — pending / approved / rejected / expired / done / failed
 
 No execute tool. Claude Code (or any MCP client) proposes, and you approve on
-your phone or in the SPA like any other proposal; the card says which client
-proposed it. The same registry backs the bot's own agent tool, so there is one
-list of actions and one gate.
+your phone like any other proposal; the card names the client and says what it
+read before is unknown. Proposals are refused while chat from Telegram is off
+(the tap could never arrive). The same registry backs the bot's own agent tool,
+so there is one list of actions and one gate. Built without the MCP SDK: plain
+JSON-RPC over POST (no server-sent stream), checked against the official Python
+SDK client (1.30): handshake on 2025-06-18, tools, calls and errors.
 
 ## mentat change (done)
 
