@@ -776,6 +776,7 @@ button.badge.clickable:active { transform: translateY(1px); }
   margin: auto; /* the global reset removes the dialog default that centers it */
 }
 .modal.wide { max-width: 640px; }
+.modal.padded { padding: 20px; }
 .modal::backdrop { background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); }
 .modal form { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .modal h3 { font-size: 15px; font-weight: 600; }
@@ -867,6 +868,28 @@ button.badge.clickable:active { transform: translateY(1px); }
 .brief-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .brief-row input[type=time] { width: auto; }
 .brief-preview { max-height: 280px; overflow: auto; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+
+/* ── Apps ── */
+.apps-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+#appsModal .modal-head { gap: 12px; justify-content: flex-start; }
+.apps-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.app-card { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.app-card.alert { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.app-card.warn { border-color: color-mix(in srgb, var(--amber) 35%, var(--border)); }
+.app-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.app-title { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.app-dot.ok { background: var(--green); }
+.app-dot.warn { background: var(--amber); }
+.app-dot.alert { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.app-open { margin-left: auto; padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+.app-open:hover { text-decoration: none; }
+.app-items { list-style: none; margin: 8px 0 0 16px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; color: var(--text-2); }
+.app-item { overflow-wrap: anywhere; }
+.app-item::before { content: "·"; margin-right: 6px; color: var(--muted); }
+.app-item.warn::before { content: "▲"; color: var(--amber); font-size: 9px; }
+.app-item.alert::before { content: "●"; color: var(--red); font-size: 9px; }
+.app-note { margin-top: 6px; padding-left: 16px; }
 
 /* ── Images ── */
 .image-tray { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 0; }

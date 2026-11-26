@@ -70,6 +70,7 @@ llm-app/
 │   └── static/                 # Brand-new SPA (vanilla JS, no build step)
 │       ├── index.html
 │       ├── app.js
+│       ├── apps.js             # Apps panel: every fleet.yaml app with its health (GET /v1/hub)
 │       ├── styles.css
 │       └── favicon.svg
 └── searxng/
@@ -167,6 +168,7 @@ Coverage:
 | `test_safe_fetch.py` · `test_watch_check.py` · `test_watches.py` | private addresses refused (DNS, redirects), exact comparison and noise, schedule/alerts/API |
 | `test_briefing.py` · `test_calendar_feed.py` | what the briefing includes and leaves out, schedule, API; iCal zones, repeats, exceptions, address never logged |
 | `test_ask_apps.py` | which apps can be asked (fleet `ask:`, home only, host.docker.internal), what is sent, answers and failures as sentences |
+| `test_apps_view.py` | the SPA's Apps panel: colour and words per /v1/hub entry (needs node) |
 | `test_hub.py` | app list rules (privacy required, only host.docker.internal), privacy rule, file cards (stale, invalid, path), adapters, failures contained, /apps and briefing text |
 | `test_images.py` · `test_image_chat.py` | only attached images (no URLs), size/pixel limits, metadata dropped, endpoints, search only when asked |
 | `test_render_md.py` | the SPA's markdown never emits HTML from the text (needs node, else skipped) |
@@ -275,8 +277,9 @@ notification rules: library results are only counted) and the homelab-triage dig
 `RedactCalendar` keeps it out of logs, and errors never include it.
 
 **App hub** (`api/hub.py`, `hub_adapters.py`; contract in `~/apps/HUB.md`): `/apps` in
-Telegram, an "Apps" section in the briefing (warnings, apps down, deadlines within 14 days)
-and `GET /v1/hub`. No model. The app list is `~/apps/fleet.yaml` (mounted at
+Telegram, an "Apps" section in the briefing (warnings, apps down, deadlines within 14 days),
+`GET /v1/hub`, and the SPA's Apps panel (`static/apps.js`, read-only; its "Open" links are
+fleet.yaml's `localhost` addresses, so they work on this computer only). No model. The app list is `~/apps/fleet.yaml` (mounted at
 `/fleet/fleet.yaml`); private apps write a card to `~/apps/.hub` (mounted read-only at
 `/hub`) so no port is opened to them; others are read by an adapter (trading, delphi, nexus,
 homelab, helm's remote fleet, mentat's digests; reach writes a file card). Only URLs in
